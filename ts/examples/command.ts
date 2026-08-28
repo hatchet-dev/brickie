@@ -5,7 +5,7 @@ import { sandbox } from '../src/index.js';
 async function main() {
   const hatchet = await initClient();
 
-  const sbx = sandbox(hatchet, { turnTimeout: '15m', image: 'node:22-slim' });
+  const sbx = sandbox(hatchet, { turnTimeout: '15m' });
 
   const session = hatchet.durableTask({
     name: 'command-session',

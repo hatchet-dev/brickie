@@ -41,6 +41,11 @@ async function sbx(args: string[], timeoutMs = 600_000): Promise<string> {
     if (/not authenticated|sbx login/i.test(detail)) {
       throw new Error('Docker Sandboxes is not authenticated: run `sbx login` and retry');
     }
+    if (/failed to apply kit/i.test(detail)) {
+      throw new Error(
+        'Docker Sandboxes could not apply the agent kit to this image: `image` must be an sbx template built from the Docker Sandboxes base image (see `sbx template`), not an arbitrary Docker image'
+      );
+    }
     throw new Error(`sbx ${args[0]} failed: ${detail || err.message}`);
   }
 }
