@@ -105,7 +105,7 @@ func bootstrapKindCmd() *cobra.Command {
 			}
 
 			say("Waiting for the provider worker")
-			if err := run("kubectl", "-n", namespace, "rollout", "status", "deploy/"+release+"-hatchet-sandbox", "--timeout=180s"); err != nil {
+			if err := run("kubectl", "-n", namespace, "rollout", "status", "deploy/"+release+"-brickie", "--timeout=180s"); err != nil {
 				return err
 			}
 			say("Done. Sandbox turns will run in namespace %q on kind-%s.", namespace, cluster)
@@ -115,8 +115,8 @@ func bootstrapKindCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", envOr("NAMESPACE", "brickie"), "namespace for the provider and sandboxes")
 	cmd.Flags().StringVar(&cluster, "cluster", "brickie", "kind cluster name")
 	cmd.Flags().StringVar(&release, "release", "brickie", "helm release name")
-	cmd.Flags().StringVar(&chart, "chart", "helm/hatchet-sandbox", "path to the hatchet-sandbox chart")
-	cmd.Flags().StringVar(&image, "image", "hatchet-sandbox-worker:latest", "provider image to build and load")
+	cmd.Flags().StringVar(&chart, "chart", "helm/brickie", "path to the brickie chart")
+	cmd.Flags().StringVar(&image, "image", "brickie-worker:latest", "provider image to build and load")
 	cmd.Flags().StringVar(&sandboxImg, "sandbox-image", "", "default sandbox image (chart default: alpine:3)")
 	cmd.Flags().StringVar(&token, "hatchet-token", os.Getenv("HATCHET_CLIENT_TOKEN"), "Hatchet client token")
 	cmd.Flags().StringVar(&anthropic, "anthropic-api-key", os.Getenv("ANTHROPIC_API_KEY"), "inject ANTHROPIC_API_KEY into sandboxes")

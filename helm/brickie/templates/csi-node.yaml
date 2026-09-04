@@ -4,7 +4,7 @@ kind: CSIDriver
 metadata:
   name: csi.brickie.hatchet.run
   labels:
-    {{- include "hatchet-sandbox.labels" . | nindent 4 }}
+    {{- include "brickie.labels" . | nindent 4 }}
 spec:
   attachRequired: false
   podInfoOnMount: true
@@ -14,10 +14,10 @@ spec:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "hatchet-sandbox.fullname" . }}-csi-node
+  name: {{ include "brickie.fullname" . }}-csi-node
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "hatchet-sandbox.labels" . | nindent 4 }}
+    {{- include "brickie.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:

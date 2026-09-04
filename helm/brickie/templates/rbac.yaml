@@ -1,10 +1,10 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "hatchet-sandbox.fullname" . }}
-  namespace: {{ include "hatchet-sandbox.sandboxNamespace" . }}
+  name: {{ include "brickie.fullname" . }}
+  namespace: {{ include "brickie.sandboxNamespace" . }}
   labels:
-    {{- include "hatchet-sandbox.labels" . | nindent 4 }}
+    {{- include "brickie.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["agents.x-k8s.io"]
     resources: ["sandboxes"]
@@ -28,15 +28,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "hatchet-sandbox.fullname" . }}
-  namespace: {{ include "hatchet-sandbox.sandboxNamespace" . }}
+  name: {{ include "brickie.fullname" . }}
+  namespace: {{ include "brickie.sandboxNamespace" . }}
   labels:
-    {{- include "hatchet-sandbox.labels" . | nindent 4 }}
+    {{- include "brickie.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "hatchet-sandbox.fullname" . }}
+  name: {{ include "brickie.fullname" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "hatchet-sandbox.fullname" . }}
+    name: {{ include "brickie.fullname" . }}
     namespace: {{ .Release.Namespace }}

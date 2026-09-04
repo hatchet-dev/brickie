@@ -12,7 +12,7 @@ brickie runs agent sandboxes as Hatchet durable tasks. Read `docs/ARCHITECTURE.m
 - `internal/controller/`: reconcilers for `brickie.hatchet.run/v1alpha1`
 - `api/v1alpha1/`: CRD types (hand-written deepcopy, no controller-gen yet)
 - `sdks/{typescript,python,go}`: thin clients, `examples/{typescript,python,go}`: runnable sessions
-- `helm/hatchet-sandbox/`: the chart, CRDs under `crds/`, agent-sandbox vendored under `charts/`
+- `helm/brickie/`: the chart, CRDs under `crds/`, agent-sandbox vendored under `charts/`
 
 ## Build and check
 
@@ -21,7 +21,7 @@ go build ./... && go vet ./...
 cd sdks/typescript && pnpm install && pnpm typecheck
 cd examples/typescript && pnpm install && pnpm typecheck
 python3 -m py_compile sdks/python/hatchet_sandbox/__init__.py
-helm lint helm/hatchet-sandbox --set hatchet.token=t
+helm lint helm/brickie --set hatchet.token=t
 ```
 
 Build binaries to /tmp or use `go install`, do not commit binaries.

@@ -4,38 +4,38 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "hatchet-sandbox.fullname" . }}
+  name: {{ include "brickie.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "hatchet-sandbox.labels" . | nindent 4 }}
+    {{- include "brickie.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "hatchet-sandbox.selectorLabels" . | nindent 6 }}
+      {{- include "brickie.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "hatchet-sandbox.selectorLabels" . | nindent 8 }}
+        {{- include "brickie.selectorLabels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "hatchet-sandbox.fullname" . }}
+      serviceAccountName: {{ include "brickie.fullname" . }}
       containers:
         - name: worker
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: BRICKIE_SANDBOX_NAMESPACE
-              value: {{ include "hatchet-sandbox.sandboxNamespace" . | quote }}
+              value: {{ include "brickie.sandboxNamespace" . | quote }}
             - name: BRICKIE_SANDBOX_IMAGE
               value: {{ .Values.sandbox.image | quote }}
             - name: BRICKIE_TURN_TIMEOUT
               value: {{ .Values.sandbox.turnTimeout | quote }}
             - name: BRICKIE_CREDENTIALS
-              value: {{ include "hatchet-sandbox.credentialNames" . | quote }}
+              value: {{ include "brickie.credentialNames" . | quote }}
           envFrom:
             {{- if or .Values.hatchet.token .Values.sandbox.credentials }}
             - secretRef:
-                name: {{ include "hatchet-sandbox.fullname" . }}
+                name: {{ include "brickie.fullname" . }}
             {{- end }}
             {{- if .Values.hatchet.existingSecret }}
             - secretRef:

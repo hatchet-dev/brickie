@@ -99,7 +99,7 @@ The target mechanism is a sidecar proxy, because a token an in-sandbox process c
 
 ## Deployment
 
-One Helm chart (`helm/hatchet-sandbox`) installs:
+One Helm chart (`helm/brickie`) installs:
 
 - the controller Deployment (Hatchet worker plus reconcilers), with the Hatchet token required at install time,
 - the brickie CRDs,

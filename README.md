@@ -16,7 +16,7 @@ The SDKs only trigger turns. The `brickie` engine (Go) executes them, either loc
 | `internal/driver/kubernetes/` | Kubernetes driver. Creates agent-sandbox `Sandbox` resources with the official v1beta1 types and runs commands with pod exec. |
 | `sdks/typescript`, `sdks/python`, `sdks/go` | Client SDKs. |
 | `examples/typescript`, `examples/python`, `examples/go` | Runnable sessions. |
-| `helm/hatchet-sandbox/` | Helm chart for the provider. Includes the agent-sandbox chart as a subchart. |
+| `helm/brickie/` | Helm chart for the provider. Includes the agent-sandbox chart as a subchart. |
 
 ## Requirements
 

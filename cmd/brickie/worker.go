@@ -89,7 +89,7 @@ func runProvider(ctx context.Context, c providerConfig) error {
 		Store:       engine.FSSnapshotStore{Dir: c.snapshotDir},
 		TurnTimeout: c.turnTimeout,
 	})
-	w, err := client.NewWorker("hatchet-sandbox-provider", hatchet.WithWorkflows(task), hatchet.WithDurableSlots(c.slots))
+	w, err := client.NewWorker("brickie-provider", hatchet.WithWorkflows(task), hatchet.WithDurableSlots(c.slots))
 	if err != nil {
 		return err
 	}
