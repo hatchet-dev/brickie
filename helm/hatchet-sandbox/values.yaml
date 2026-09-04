@@ -17,6 +17,11 @@ sandbox:
   existingCredentialsSecret: ""
   credentialNames: []
 
+csi:
+  enabled: false
+  dataDir: /var/lib/brickie
+  objectStore: ""
+
 resources: {}
 nodeSelector: {}
 tolerations: []
