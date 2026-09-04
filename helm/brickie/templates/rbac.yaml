@@ -1,0 +1,42 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "brickie.fullname" . }}
+  namespace: {{ include "brickie.sandboxNamespace" . }}
+  labels:
+    {{- include "brickie.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["create", "delete", "get", "list", "watch", "update", "patch"]
+  - apiGroups: ["brickie.hatchet.run"]
+    resources: ["sandboxsessions", "workspacesnapshots"]
+    verbs: ["create", "delete", "get", "list", "watch", "update", "patch"]
+  - apiGroups: ["brickie.hatchet.run"]
+    resources: ["sandboxsessions/status", "workspacesnapshots/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "brickie.fullname" . }}
+  namespace: {{ include "brickie.sandboxNamespace" . }}
+  labels:
+    {{- include "brickie.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "brickie.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "brickie.fullname" . }}
+    namespace: {{ .Release.Namespace }}

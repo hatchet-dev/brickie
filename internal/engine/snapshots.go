@@ -1,0 +1,40 @@
+package engine
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+type SnapshotStore interface {
+	Read(id string) ([]byte, error)
+	Write(id string, tar []byte) error
+}
+
+type FSSnapshotStore struct {
+	Dir string
+}
+
+func DefaultSnapshotDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "brickie", "snapshots")
+	}
+	return filepath.Join(home, ".brickie", "snapshots")
+}
+
+func (s FSSnapshotStore) Read(id string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(s.Dir, id+".tar.gz"))
+}
+
+func (s FSSnapshotStore) Write(id string, tar []byte) error {
+	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+		return err
+	}
+	dest := filepath.Join(s.Dir, id+".tar.gz")
+	tmp := fmt.Sprintf("%s.tmp-%d", dest, os.Getpid())
+	if err := os.WriteFile(tmp, tar, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dest)
+}

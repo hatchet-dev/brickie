@@ -1,0 +1,87 @@
+{{- if .Values.csi.enabled }}
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.brickie.hatchet.run
+  labels:
+    {{- include "brickie.labels" . | nindent 4 }}
+spec:
+  attachRequired: false
+  podInfoOnMount: true
+  volumeLifecycleModes:
+    - Ephemeral
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "brickie.fullname" . }}-csi-node
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "brickie.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: brickie-csi-node
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: brickie-csi-node
+    spec:
+      containers:
+        - name: registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.13.0
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path=/var/lib/kubelet/plugins/csi.brickie.hatchet.run/csi.sock
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+        - name: node
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["csi-node"]
+          securityContext:
+            privileged: true
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: BRICKIE_DATA_DIR
+              value: {{ .Values.csi.dataDir | quote }}
+            {{- if .Values.csi.objectStore }}
+            - name: BRICKIE_OBJECT_STORE
+              value: {{ .Values.csi.objectStore | quote }}
+            {{- end }}
+          ports:
+            - containerPort: 7078
+              name: checkpoint
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: data-dir
+              mountPath: {{ .Values.csi.dataDir | quote }}
+              mountPropagation: Bidirectional
+            - name: pods-dir
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+      volumes:
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.brickie.hatchet.run
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: data-dir
+          hostPath:
+            path: {{ .Values.csi.dataDir | quote }}
+            type: DirectoryOrCreate
+        - name: pods-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+{{- end }}

@@ -387,3 +387,8 @@ pyrightconfig.json
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/go,node,macos,dotenv,python,visualstudiocode
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate*

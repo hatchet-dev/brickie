@@ -1,0 +1,32 @@
+replicaCount: 1
+
+image:
+  repository: brickie-worker
+  tag: latest
+  pullPolicy: IfNotPresent
+
+hatchet:
+  token: ""
+  existingSecret: ""
+
+sandbox:
+  namespace: ""
+  image: alpine:3
+  turnTimeout: 15m
+  credentials: {}
+  existingCredentialsSecret: ""
+  credentialNames: []
+
+csi:
+  enabled: false
+  dataDir: /var/lib/brickie
+  objectStore: ""
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+
+agent-sandbox:
+  enabled: true
+  image:
+    tag: v0.5.6
