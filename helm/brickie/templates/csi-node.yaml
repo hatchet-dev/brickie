@@ -27,6 +27,10 @@ spec:
       labels:
         app.kubernetes.io/name: brickie-csi-node
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: registrar
           image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.13.0
