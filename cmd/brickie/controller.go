@@ -8,6 +8,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	sandboxv1beta1 "sigs.k8s.io/agent-sandbox/api/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	brickiev1alpha1 "github.com/hatchet-dev/brickie/api/v1alpha1"
@@ -34,6 +35,11 @@ func controllerCmd() *cobra.Command {
 			mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 				Scheme:  scheme,
 				Metrics: ctrlmetrics.Options{BindAddress: metricsAddr},
+				Cache: ctrlcache.Options{
+					DefaultNamespaces: map[string]ctrlcache.Config{
+						providerCfg.namespace: {},
+					},
+				},
 			})
 			if err != nil {
 				return err

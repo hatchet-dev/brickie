@@ -1,4 +1,5 @@
 replicaCount: 1
+slots: 10
 
 image:
   repository: brickie-worker
@@ -18,6 +19,9 @@ sandbox:
   credentials: {}
   existingCredentialsSecret: ""
   credentialNames: []
+
+objectStore: ""
+objectStoreSecret: ""
 
 csi:
   enabled: false

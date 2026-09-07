@@ -15,7 +15,7 @@ func mountOverlay(lower, upper, work, target string) error {
 }
 
 func unmountOverlay(target string) error {
-	return unix.Unmount(target, 0)
+	return unmountIdempotent(target)
 }
 
 func bindMount(source, target string) error {
@@ -23,7 +23,18 @@ func bindMount(source, target string) error {
 }
 
 func unmountBind(target string) error {
-	return unix.Unmount(target, 0)
+	return unmountIdempotent(target)
+}
+
+func unmountIdempotent(target string) error {
+	err := unix.Unmount(target, 0)
+	if err == unix.EBUSY {
+		err = unix.Unmount(target, unix.MNT_DETACH)
+	}
+	if err == unix.EINVAL || err == unix.ENOENT {
+		return nil
+	}
+	return err
 }
 
 func syncFS(mountpoint string) error {

@@ -48,6 +48,9 @@ spec:
           args: ["csi-node"]
           securityContext:
             privileged: true
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
@@ -55,10 +58,16 @@ spec:
                   fieldPath: spec.nodeName
             - name: BRICKIE_DATA_DIR
               value: {{ .Values.csi.dataDir | quote }}
-            {{- if .Values.csi.objectStore }}
+            {{- $objectStore := .Values.csi.objectStore | default .Values.objectStore }}
+            {{- if $objectStore }}
             - name: BRICKIE_OBJECT_STORE
-              value: {{ .Values.csi.objectStore | quote }}
+              value: {{ $objectStore | quote }}
             {{- end }}
+          {{- if .Values.objectStoreSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.objectStoreSecret }}
+          {{- end }}
           ports:
             - containerPort: 7078
               name: checkpoint

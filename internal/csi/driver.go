@@ -43,7 +43,7 @@ func Serve(opts Options) error {
 
 	server := grpc.NewServer()
 	csipb.RegisterIdentityServer(server, identityServer{})
-	csipb.RegisterNodeServer(server, nodeServer{nodeID: opts.NodeID, manager: manager})
+	csipb.RegisterNodeServer(server, nodeServer{nodeID: opts.NodeID, dataDir: opts.DataDir, manager: manager})
 
 	if opts.HTTPAddr != "" {
 		mux := http.NewServeMux()

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"regexp"
 	"strconv"
@@ -38,7 +39,11 @@ type Options struct {
 	Image        string
 	Credentials  []string
 	ReadyTimeout time.Duration
+	Overlay      bool
+	CSIPort      int
 }
+
+const csiNodeLabel = "app.kubernetes.io/name=brickie-csi-node"
 
 type Driver struct {
 	opts      Options
@@ -56,6 +61,9 @@ func New(opts Options) (*Driver, error) {
 	}
 	if opts.ReadyTimeout == 0 {
 		opts.ReadyTimeout = 5 * time.Minute
+	}
+	if opts.CSIPort == 0 {
+		opts.CSIPort = 7078
 	}
 	restCfg, err := loadConfig(opts.Context)
 	if err != nil {
@@ -177,21 +185,38 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	if image == "" {
 		image = d.opts.Image
 	}
+	podSpec := corev1.PodSpec{
+		Containers: []corev1.Container{{
+			Name:       container,
+			Image:      image,
+			Command:    []string{"sleep", "infinity"},
+			Env:        d.injectedEnv(),
+			WorkingDir: engine.Workspace,
+		}},
+	}
+	if d.opts.Overlay {
+		podSpec.Volumes = []corev1.Volume{{
+			Name: "workspace",
+			VolumeSource: corev1.VolumeSource{
+				CSI: &corev1.CSIVolumeSource{
+					Driver: "csi.brickie.hatchet.run",
+					VolumeAttributes: map[string]string{
+						"brickie.hatchet.run/sandbox-id":  req.SandboxName,
+						"brickie.hatchet.run/snapshot-id": req.SnapshotID,
+					},
+				},
+			},
+		}}
+		podSpec.Containers[0].VolumeMounts = []corev1.VolumeMount{{
+			Name:      "workspace",
+			MountPath: engine.Workspace,
+		}}
+	}
 	sb := &sandboxv1beta1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Name: req.SandboxName, Namespace: d.opts.Namespace},
 		Spec: sandboxv1beta1.SandboxSpec{
 			SandboxBlueprint: sandboxv1beta1.SandboxBlueprint{
-				PodTemplate: sandboxv1beta1.PodTemplate{
-					Spec: corev1.PodSpec{
-						Containers: []corev1.Container{{
-							Name:       container,
-							Image:      image,
-							Command:    []string{"sleep", "infinity"},
-							Env:        d.injectedEnv(),
-							WorkingDir: engine.Workspace,
-						}},
-					},
-				},
+				PodTemplate: sandboxv1beta1.PodTemplate{Spec: podSpec},
 			},
 		},
 	}
@@ -205,12 +230,14 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	if err := d.waitReady(ctx, req.SandboxName); err != nil {
 		return engine.TurnResponse{}, err
 	}
-	if _, err := d.mustExec(ctx, req.SandboxName, []string{"mkdir", "-p", engine.Workspace}, nil); err != nil {
-		return engine.TurnResponse{}, err
-	}
-	if req.SnapshotTar != nil {
-		if _, err := d.mustExec(ctx, req.SandboxName, []string{"tar", "-xzf", "-", "-C", engine.Workspace}, req.SnapshotTar); err != nil {
-			return engine.TurnResponse{}, fmt.Errorf("restore snapshot: %w", err)
+	if !d.opts.Overlay {
+		if _, err := d.mustExec(ctx, req.SandboxName, []string{"mkdir", "-p", engine.Workspace}, nil); err != nil {
+			return engine.TurnResponse{}, err
+		}
+		if req.SnapshotTar != nil {
+			if _, err := d.mustExec(ctx, req.SandboxName, []string{"tar", "-xzf", "-", "-C", engine.Workspace}, req.SnapshotTar); err != nil {
+				return engine.TurnResponse{}, fmt.Errorf("restore snapshot: %w", err)
+			}
 		}
 	}
 
@@ -281,9 +308,54 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	if err != nil {
 		return engine.TurnResponse{}, err
 	}
+	if d.opts.Overlay {
+		if err := d.checkpoint(ctx, req.SandboxName, req.CheckpointID); err != nil {
+			return engine.TurnResponse{}, err
+		}
+		return engine.TurnResponse{Output: outJSON}, nil
+	}
 	tar, err := d.mustExec(ctx, req.SandboxName, []string{"tar", "-czf", "-", "-C", engine.Workspace, "."}, nil)
 	if err != nil {
 		return engine.TurnResponse{}, fmt.Errorf("snapshot workspace: %w", err)
 	}
 	return engine.TurnResponse{Output: outJSON, SnapshotTar: tar.Stdout}, nil
+}
+
+func (d *Driver) SnapshotNative() bool {
+	return d.opts.Overlay
+}
+
+// checkpoint asks the CSI node daemon on the sandbox pod's node to freeze the
+// workspace upper layer as the snapshot named by checkpointID.
+func (d *Driver) checkpoint(ctx context.Context, sandboxName, checkpointID string) error {
+	pod, err := d.clientset.CoreV1().Pods(d.opts.Namespace).Get(ctx, sandboxName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("resolve sandbox pod node: %w", err)
+	}
+	nodes, err := d.clientset.CoreV1().Pods(d.opts.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: csiNodeLabel,
+		FieldSelector: "spec.nodeName=" + pod.Spec.NodeName,
+	})
+	if err != nil {
+		return fmt.Errorf("find csi node pod on %s: %w", pod.Spec.NodeName, err)
+	}
+	if len(nodes.Items) == 0 || nodes.Items[0].Status.PodIP == "" {
+		return fmt.Errorf("no running brickie csi node pod on node %s (is csi.enabled set?)", pod.Spec.NodeName)
+	}
+	body, _ := json.Marshal(map[string]string{"sandboxId": sandboxName, "snapshotId": checkpointID})
+	url := fmt.Sprintf("http://%s:%d/v1/checkpoint", nodes.Items[0].Status.PodIP, d.opts.CSIPort)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	res, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("checkpoint %s: %w", sandboxName, err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		detail, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		return fmt.Errorf("checkpoint %s failed (%d): %s", sandboxName, res.StatusCode, detail)
+	}
+	return nil
 }

@@ -1,9 +1,14 @@
 package engine
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/hatchet-dev/brickie/internal/overlay"
 )
 
 type SnapshotStore interface {
@@ -37,4 +42,39 @@ func (s FSSnapshotStore) Write(id string, tar []byte) error {
 		return err
 	}
 	return os.Rename(tmp, dest)
+}
+
+// ObjectSnapshotStore keeps turn snapshots in an object store, with the local
+// filesystem store acting as a read cache.
+type ObjectSnapshotStore struct {
+	Cache  FSSnapshotStore
+	Remote overlay.ObjectStore
+}
+
+func snapshotKey(id string) string {
+	return "brickie-snapshots/" + id + ".tar.gz"
+}
+
+func (s ObjectSnapshotStore) Read(id string) ([]byte, error) {
+	if tar, err := s.Cache.Read(id); err == nil {
+		return tar, nil
+	}
+	body, err := s.Remote.Get(context.Background(), snapshotKey(id))
+	if err != nil {
+		return nil, fmt.Errorf("fetch snapshot %s from object store: %w", id, err)
+	}
+	defer body.Close()
+	tar, err := io.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	_ = s.Cache.Write(id, tar)
+	return tar, nil
+}
+
+func (s ObjectSnapshotStore) Write(id string, tar []byte) error {
+	if err := s.Remote.Put(context.Background(), snapshotKey(id), bytes.NewReader(tar)); err != nil {
+		return fmt.Errorf("offload snapshot %s: %w", id, err)
+	}
+	return s.Cache.Write(id, tar)
 }

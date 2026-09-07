@@ -26,12 +26,14 @@ type TurnResult struct {
 }
 
 type TurnRequest struct {
-	SandboxName string
-	Image       string
-	Fn          string
-	FnSource    string
-	Input       json.RawMessage
-	SnapshotTar []byte
+	SandboxName  string
+	Image        string
+	Fn           string
+	FnSource     string
+	Input        json.RawMessage
+	SnapshotTar  []byte
+	SnapshotID   string
+	CheckpointID string
 }
 
 type TurnResponse struct {
@@ -41,6 +43,13 @@ type TurnResponse struct {
 
 type Driver interface {
 	RunTurn(ctx context.Context, req TurnRequest) (TurnResponse, error)
+}
+
+// SnapshotNativeDriver marks drivers that restore and checkpoint snapshots
+// themselves (overlayfs chains through the CSI node). The provider then passes
+// snapshot ids instead of tar bytes and skips its own store entirely.
+type SnapshotNativeDriver interface {
+	SnapshotNative() bool
 }
 
 type CommandInput struct {

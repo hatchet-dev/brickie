@@ -36,6 +36,16 @@ spec:
               value: {{ .Values.sandbox.turnTimeout | quote }}
             - name: BRICKIE_CREDENTIALS
               value: {{ include "brickie.credentialNames" . | quote }}
+            {{- if .Values.objectStore }}
+            - name: BRICKIE_OBJECT_STORE
+              value: {{ .Values.objectStore | quote }}
+            {{- end }}
+            {{- if .Values.csi.enabled }}
+            - name: BRICKIE_OVERLAY
+              value: "true"
+            {{- end }}
+            - name: BRICKIE_SLOTS
+              value: {{ .Values.slots | quote }}
           envFrom:
             {{- if or .Values.hatchet.token .Values.sandbox.credentials }}
             - secretRef:
@@ -48,6 +58,10 @@ spec:
             {{- if .Values.sandbox.existingCredentialsSecret }}
             - secretRef:
                 name: {{ .Values.sandbox.existingCredentialsSecret }}
+            {{- end }}
+            {{- if .Values.objectStoreSecret }}
+            - secretRef:
+                name: {{ .Values.objectStoreSecret }}
             {{- end }}
           {{- with .Values.resources }}
           resources:

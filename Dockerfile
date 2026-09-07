@@ -7,7 +7,8 @@ COPY api ./api
 COPY internal ./internal
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /brickie ./cmd/brickie
 
-FROM gcr.io/distroless/static:nonroot
+FROM alpine:3.22
+RUN apk add --no-cache tar
 COPY --from=build /brickie /brickie
 ENTRYPOINT ["/brickie"]
 CMD ["controller"]

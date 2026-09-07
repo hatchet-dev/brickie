@@ -16,6 +16,13 @@ type Manager struct {
 	Store *Store
 }
 
+// maxChainDepth bounds the overlay lowerdir chain. The kernel caps the mount
+// option string at one page (~4KB) on older kernels, and each layer path is
+// ~110 bytes, so a chain deeper than ~35 overflows and the mount fails with
+// ENOENT on a truncated path. When a checkpoint would exceed this, the whole
+// workspace is squashed into one fresh base layer instead of appending.
+const maxChainDepth = 20
+
 func NewManager(root string) *Manager {
 	return &Manager{Root: root, Store: &Store{Root: root}}
 }
@@ -102,48 +109,40 @@ func (m *Manager) Mount(sandboxID, snapshotID string) (string, error) {
 	return merged, nil
 }
 
-// Checkpoint freezes the current upper as a new layer, records a snapshot
-// manifest, and remounts with the extended chain and a fresh upper. syncfs
-// runs before umount so the agent-visible pause stays small.
+// Checkpoint freezes the current upper as a new layer and records a snapshot
+// manifest. The overlay stays mounted: the upperdir is a plain host directory
+// holding exactly this turn's diff, so it is tarred in place after a syncfs
+// flush. The mount is torn down later by Unmount when the pod is deleted, and
+// the next turn is a fresh mount, so there is no remount here.
 func (m *Manager) Checkpoint(sandboxID, snapshotID string) ([]string, error) {
 	chain, err := m.readChain(sandboxID)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox %s is not mounted: %w", sandboxID, err)
 	}
-	upper, work, merged := m.paths(sandboxID)
+	upper, _, merged := m.paths(sandboxID)
 
 	if err := syncFS(merged); err != nil {
 		return nil, err
 	}
-	if err := unmountOverlay(merged); err != nil {
-		return nil, err
+	if len(chain) >= maxChainDepth {
+		// Squash: freeze the full merged view as a single base layer so the
+		// chain never grows past the kernel's mount-option limit.
+		digest, err := m.Store.PutUpper(merged)
+		if err != nil {
+			return nil, err
+		}
+		chain = []string{digest}
+	} else {
+		digest, err := m.Store.PutUpper(upper)
+		if err != nil {
+			return nil, err
+		}
+		chain = append(chain, digest)
 	}
-
-	digest, err := m.Store.PutUpper(upper)
-	if err != nil {
-		return nil, err
-	}
-	chain = append(chain, digest)
 	if err := m.Store.WriteManifest(snapshotID, chain); err != nil {
 		return nil, err
 	}
-
-	for _, dir := range []string{upper, work} {
-		if err := os.RemoveAll(dir); err != nil {
-			return nil, err
-		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, err
-		}
-	}
-	lower, err := m.lowerdirOption(chain)
-	if err != nil {
-		return nil, err
-	}
-	if err := mountOverlay(lower, upper, work, merged); err != nil {
-		return nil, fmt.Errorf("remount after checkpoint: %w", err)
-	}
-	return chain, m.writeChain(sandboxID, chain)
+	return chain, nil
 }
 
 func (m *Manager) Unmount(sandboxID string) error {

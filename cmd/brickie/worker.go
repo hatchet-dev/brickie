@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/hatchet-dev/brickie/internal/driver/kubernetes"
 	"github.com/hatchet-dev/brickie/internal/driver/local"
 	"github.com/hatchet-dev/brickie/internal/engine"
+	"github.com/hatchet-dev/brickie/internal/overlay"
 )
 
 func envOr(key, fallback string) string {
@@ -29,9 +31,11 @@ type providerConfig struct {
 	image       string
 	credentials string
 	snapshotDir string
+	objectStore string
 	kubeContext string
 	turnTimeout time.Duration
 	slots       int
+	overlay     bool
 }
 
 func (c providerConfig) registerFlags(cmd *cobra.Command) {
@@ -46,9 +50,17 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&providerCfg.image, "image", envOr("BRICKIE_SANDBOX_IMAGE", ""), "default sandbox image")
 	cmd.Flags().StringVar(&providerCfg.credentials, "credentials", envOr("BRICKIE_CREDENTIALS", ""), "comma-separated env var names to inject into sandboxes")
 	cmd.Flags().StringVar(&providerCfg.snapshotDir, "snapshot-dir", envOr("BRICKIE_SNAPSHOT_DIR", engine.DefaultSnapshotDir()), "snapshot storage directory")
+	cmd.Flags().StringVar(&providerCfg.objectStore, "object-store", envOr("BRICKIE_OBJECT_STORE", ""), "object store URL for turn snapshots: s3://, gs://, azblob://, or s3:// with ?endpoint= for any S3-compatible store")
 	cmd.Flags().DurationVar(&providerCfg.turnTimeout, "turn-timeout", defaultTimeout, "execution timeout per sandbox turn")
 	cmd.Flags().StringVar(&providerCfg.kubeContext, "context", envOr("BRICKIE_KUBE_CONTEXT", ""), "kubeconfig context (kubernetes driver)")
-	cmd.Flags().IntVar(&providerCfg.slots, "slots", 10, "concurrent sandbox turns")
+	defaultSlots := 10
+	if v := os.Getenv("BRICKIE_SLOTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			defaultSlots = n
+		}
+	}
+	cmd.Flags().IntVar(&providerCfg.slots, "slots", defaultSlots, "concurrent sandbox turns")
+	cmd.Flags().BoolVar(&providerCfg.overlay, "overlay", os.Getenv("BRICKIE_OVERLAY") == "true", "use overlayfs workspaces via the brickie CSI driver (kubernetes driver only)")
 }
 
 var providerCfg providerConfig
@@ -69,6 +81,7 @@ func (c providerConfig) buildDriver() (engine.Driver, error) {
 			Namespace:   c.namespace,
 			Image:       c.image,
 			Credentials: creds,
+			Overlay:     c.overlay,
 		})
 	default:
 		return nil, fmt.Errorf("unknown driver %q (local|kubernetes)", c.driver)
@@ -84,9 +97,18 @@ func runProvider(ctx context.Context, c providerConfig) error {
 	if err != nil {
 		return err
 	}
+	var store engine.SnapshotStore = engine.FSSnapshotStore{Dir: c.snapshotDir}
+	if c.objectStore != "" {
+		remote, err := overlay.NewBucketStore(ctx, c.objectStore)
+		if err != nil {
+			return err
+		}
+		store = engine.ObjectSnapshotStore{Cache: engine.FSSnapshotStore{Dir: c.snapshotDir}, Remote: remote}
+		fmt.Fprintf(os.Stderr, "brickie: turn snapshots offloaded to object store\n")
+	}
 	task := engine.NewProviderTask(client, engine.ProviderOpts{
 		Driver:      driver,
-		Store:       engine.FSSnapshotStore{Dir: c.snapshotDir},
+		Store:       store,
 		TurnTimeout: c.turnTimeout,
 	})
 	w, err := client.NewWorker("brickie-provider", hatchet.WithWorkflows(task), hatchet.WithDurableSlots(c.slots))

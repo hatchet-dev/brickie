@@ -6,7 +6,9 @@
     "command": "tsx command.ts",
     "prompt": "tsx prompt.ts",
     "harness": "tsx harness.ts",
-    "k8s": "tsx k8s.ts"
+    "k8s": "tsx k8s.ts",
+    "resume": "tsx resume.ts",
+    "loadtest": "tsx loadtest.ts"
   },
   "dependencies": {
     "@hatchet/sandbox": "file:../../sdks/typescript",
