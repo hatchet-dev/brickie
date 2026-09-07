@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { DurableContext, HatchetClient, JsonObject } from '@hatchet-dev/typescript-sdk/v1';
+import { Duration, DurableContext, HatchetClient, JsonObject } from '@hatchet-dev/typescript-sdk/v1';
+import type { SandboxBackend } from './backend.js';
 
 export const SANDBOX_TASK_NAME = 'brickie-sandbox';
 
@@ -26,6 +27,9 @@ export type SandboxFn = (
 
 export interface SandboxOpts {
   image?: string;
+  backend?: SandboxBackend;
+  credentials?: string[];
+  turnTimeout?: Duration;
 }
 
 export interface ExecuteOpts {
@@ -68,8 +72,36 @@ function ensureLocalProvider(hatchet: HatchetClient) {
   process.on('exit', () => child.kill());
 }
 
+const backendProvidersStarted = new Set<string>();
+
+function ensureBackendProvider(
+  hatchet: HatchetClient,
+  backend: SandboxBackend,
+  credentials: string[],
+  turnTimeout?: Duration
+) {
+  if (backendProvidersStarted.has(backend.name)) {
+    return;
+  }
+  backendProvidersStarted.add(backend.name);
+  void (async () => {
+    const { runTurnOnBackend } = await import('./backend.js');
+    const task = hatchet.durableTask<SandboxTurnInput, TurnResult>({
+      name: SANDBOX_TASK_NAME,
+      executionTimeout: turnTimeout ?? '15m',
+      fn: (turn) => runTurnOnBackend(backend, turn, credentials),
+    });
+    const worker = await hatchet.worker(`brickie-${backend.name}-provider`, { workflows: [task] });
+    void worker.start();
+  })();
+}
+
 export function sandbox(hatchet: HatchetClient, opts: SandboxOpts = {}) {
-  ensureLocalProvider(hatchet);
+  if (opts.backend) {
+    ensureBackendProvider(hatchet, opts.backend, opts.credentials ?? [], opts.turnTimeout);
+  } else {
+    ensureLocalProvider(hatchet);
+  }
 
   const seq = new WeakMap<object, number>();
   const nextKey = (ctx: object) => {

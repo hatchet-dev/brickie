@@ -5,13 +5,16 @@ import (
 	"time"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
+
+	"github.com/hatchet-dev/brickie/internal/image"
 )
 
 type ProviderOpts struct {
-	Driver      Driver
-	Store       SnapshotStore
-	TurnTimeout time.Duration
-	Retries     int
+	Driver        Driver
+	Store         SnapshotStore
+	ImageProvider image.Provider
+	TurnTimeout   time.Duration
+	Retries       int
 }
 
 func NewProviderTask(client *hatchet.Client, opts ProviderOpts) *hatchet.StandaloneTask {
@@ -27,11 +30,19 @@ func NewProviderTask(client *hatchet.Client, opts ProviderOpts) *hatchet.Standal
 	if d, ok := opts.Driver.(SnapshotNativeDriver); ok {
 		native = d.SnapshotNative()
 	}
+	imageProvider := opts.ImageProvider
+	if imageProvider == nil {
+		imageProvider = image.Registry{}
+	}
 	return client.NewStandaloneDurableTask(TaskName, func(ctx hatchet.DurableContext, input TurnInput) (TurnResult, error) {
 		runID := ctx.WorkflowRunId()
+		resolved, err := imageProvider.Resolve(ctx, image.Spec{Ref: input.Image})
+		if err != nil {
+			return TurnResult{}, fmt.Errorf("resolve image: %w", err)
+		}
 		req := TurnRequest{
-			SandboxName:  "bx-" + runID,
-			Image:        input.Image,
+			SandboxName:  "brickie-" + runID,
+			Image:        resolved.Ref,
 			Fn:           input.Fn,
 			FnSource:     input.FnSource,
 			Input:        input.Input,
