@@ -44,6 +44,22 @@ spec:
             - name: BRICKIE_OVERLAY
               value: "true"
             {{- end }}
+            {{- if .Values.injector.enabled }}
+            {{- if not .Values.injector.secret }}
+            {{- fail "injector.secret is required when injector.enabled: a Secret with BRICKIE_INJECTOR_PUBLIC_KEY and BRICKIE_INJECTOR_PRIVATE_KEY (run `brickie injector keygen`)" }}
+            {{- end }}
+            - name: BRICKIE_INJECTOR
+              value: "true"
+            - name: BRICKIE_INJECTOR_SECRET
+              value: {{ .Values.injector.secret | quote }}
+            - name: BRICKIE_INJECTOR_IMAGE
+              value: {{ .Values.injector.image | default (printf "%s:%s" .Values.image.repository .Values.image.tag) | quote }}
+            - name: BRICKIE_INJECTOR_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.injector.secret }}
+                  key: BRICKIE_INJECTOR_PUBLIC_KEY
+            {{- end }}
             - name: BRICKIE_SLOTS
               value: {{ .Values.slots | quote }}
           envFrom:

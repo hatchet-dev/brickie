@@ -26,16 +26,19 @@ func envOr(key, fallback string) string {
 }
 
 type providerConfig struct {
-	driver      string
-	namespace   string
-	image       string
-	credentials string
-	snapshotDir string
-	objectStore string
-	kubeContext string
-	turnTimeout time.Duration
-	slots       int
-	overlay     bool
+	driver         string
+	namespace      string
+	image          string
+	credentials    string
+	snapshotDir    string
+	objectStore    string
+	kubeContext    string
+	turnTimeout    time.Duration
+	slots          int
+	overlay        bool
+	injector       bool
+	injectorSecret string
+	injectorImage  string
 }
 
 func (c providerConfig) registerFlags(cmd *cobra.Command) {
@@ -61,6 +64,9 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 	}
 	cmd.Flags().IntVar(&providerCfg.slots, "slots", defaultSlots, "concurrent sandbox turns")
 	cmd.Flags().BoolVar(&providerCfg.overlay, "overlay", os.Getenv("BRICKIE_OVERLAY") == "true", "use overlayfs workspaces via the brickie CSI driver (kubernetes driver only)")
+	cmd.Flags().BoolVar(&providerCfg.injector, "injector", os.Getenv("BRICKIE_INJECTOR") == "true", "run the credential injector sidecar in sandbox pods and seal credentials instead of injecting raw values")
+	cmd.Flags().StringVar(&providerCfg.injectorSecret, "injector-secret", envOr("BRICKIE_INJECTOR_SECRET", ""), "kubernetes Secret holding BRICKIE_INJECTOR_PUBLIC_KEY and BRICKIE_INJECTOR_PRIVATE_KEY")
+	cmd.Flags().StringVar(&providerCfg.injectorImage, "injector-image", envOr("BRICKIE_INJECTOR_IMAGE", ""), "image for the injector sidecar (usually the brickie image)")
 }
 
 var providerCfg providerConfig
@@ -82,6 +88,12 @@ func (c providerConfig) buildDriver() (engine.Driver, error) {
 			Image:       c.image,
 			Credentials: creds,
 			Overlay:     c.overlay,
+			Injector: kubernetes.InjectorOptions{
+				Enabled:    c.injector,
+				SecretName: c.injectorSecret,
+				Image:      c.injectorImage,
+				PublicKey:  os.Getenv("BRICKIE_INJECTOR_PUBLIC_KEY"),
+			},
 		})
 	default:
 		return nil, fmt.Errorf("unknown driver %q (local|kubernetes)", c.driver)

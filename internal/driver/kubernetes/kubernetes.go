@@ -27,11 +27,20 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/hatchet-dev/brickie/internal/engine"
+	"github.com/hatchet-dev/brickie/internal/injector"
 )
 
 const container = "sandbox"
 
 var exitMarker = regexp.MustCompile(`__BRICKIE_EXIT__(\d+)$`)
+
+type InjectorOptions struct {
+	Enabled    bool
+	SecretName string
+	Image      string
+	PublicKey  string
+	Port       int
+}
 
 type Options struct {
 	Context      string
@@ -41,6 +50,7 @@ type Options struct {
 	ReadyTimeout time.Duration
 	Overlay      bool
 	CSIPort      int
+	Injector     InjectorOptions
 }
 
 const csiNodeLabel = "app.kubernetes.io/name=brickie-csi-node"
@@ -64,6 +74,14 @@ func New(opts Options) (*Driver, error) {
 	}
 	if opts.CSIPort == 0 {
 		opts.CSIPort = 7078
+	}
+	if opts.Injector.Port == 0 {
+		opts.Injector.Port = 3128
+	}
+	if opts.Injector.Enabled {
+		if opts.Injector.PublicKey == "" || opts.Injector.SecretName == "" || opts.Injector.Image == "" {
+			return nil, fmt.Errorf("injector mode requires the injector public key, secret name, and image")
+		}
 	}
 	restCfg, err := loadConfig(opts.Context)
 	if err != nil {
@@ -99,14 +117,101 @@ func loadConfig(kubeContext string) (*rest.Config, error) {
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
 }
 
-func (d *Driver) injectedEnv() []corev1.EnvVar {
+// hatchetEnv is always injected so in-sandbox harnesses can reach Hatchet
+// (MCP tools that are Hatchet tasks, child task triggers, log streaming).
+// Hatchet's gRPC connection cannot route through the HTTP injector, so the
+// token is injected raw even in injector mode until the sidecar grows a
+// Hatchet proxy that mints run-scoped tokens.
+func hatchetEnv() []corev1.EnvVar {
 	env := []corev1.EnvVar{}
-	for _, name := range d.opts.Credentials {
+	for _, name := range []string{"HATCHET_CLIENT_TOKEN", "HATCHET_CLIENT_HOST_PORT", "HATCHET_CLIENT_TLS_STRATEGY"} {
 		if v, ok := os.LookupEnv(name); ok {
 			env = append(env, corev1.EnvVar{Name: name, Value: v})
 		}
 	}
 	return env
+}
+
+func mergeEnv(base, extra []corev1.EnvVar) []corev1.EnvVar {
+	seen := map[string]bool{}
+	for _, e := range base {
+		seen[e.Name] = true
+	}
+	for _, e := range extra {
+		if !seen[e.Name] {
+			seen[e.Name] = true
+			base = append(base, e)
+		}
+	}
+	return base
+}
+
+func (d *Driver) injectedEnv() ([]corev1.EnvVar, error) {
+	if !d.opts.Injector.Enabled {
+		env := []corev1.EnvVar{}
+		for _, name := range d.opts.Credentials {
+			if v, ok := os.LookupEnv(name); ok {
+				env = append(env, corev1.EnvVar{Name: name, Value: v})
+			}
+		}
+		return mergeEnv(hatchetEnv(), env), nil
+	}
+	env, err := buildInjectorEnv(d.opts.Injector.PublicKey, d.opts.Injector.Port, d.opts.Credentials, os.Getenv)
+	if err != nil {
+		return nil, err
+	}
+	return mergeEnv(hatchetPlaceholderEnv(), env), nil
+}
+
+// hatchetPlaceholderEnv is the injector-mode variant of hatchetEnv: the
+// sandbox gets a placeholder token (parseable, unusable) pointing at the
+// sidecar's hatchet proxy; the real token lives only in the sidecar.
+func hatchetPlaceholderEnv() []corev1.EnvVar {
+	realToken := os.Getenv("HATCHET_CLIENT_TOKEN")
+	if realToken == "" {
+		return []corev1.EnvVar{}
+	}
+	const listen = "127.0.0.1:7077"
+	placeholder, err := injector.MintHatchetPlaceholder(realToken, listen)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "brickie: cannot mint hatchet placeholder token (%v); omitting hatchet env from sandbox\n", err)
+		return []corev1.EnvVar{}
+	}
+	return []corev1.EnvVar{
+		{Name: "HATCHET_CLIENT_TOKEN", Value: placeholder},
+		{Name: "HATCHET_CLIENT_HOST_PORT", Value: listen},
+		{Name: "HATCHET_CLIENT_TLS_STRATEGY", Value: "none"},
+	}
+}
+
+func buildInjectorEnv(publicKey string, port int, credentials []string, getenv func(string) string) ([]corev1.EnvVar, error) {
+	env := []corev1.EnvVar{}
+	baseURLsSet := map[string]bool{}
+	for _, name := range credentials {
+		value := getenv(name)
+		if value == "" {
+			continue
+		}
+		entry, known := injector.Catalog[name]
+		if !known || entry.BaseURLEnv == "" {
+			fmt.Fprintf(os.Stderr, "brickie: credential %s has no injector route; injecting raw value\n", name)
+			env = append(env, corev1.EnvVar{Name: name, Value: value})
+			continue
+		}
+		sealed, err := injector.Seal(publicKey, injector.Secret{Token: value, AllowedHosts: entry.Hosts})
+		if err != nil {
+			return nil, fmt.Errorf("seal credential %s: %w", name, err)
+		}
+		env = append(env, corev1.EnvVar{Name: entry.TargetEnv, Value: sealed})
+		if !baseURLsSet[entry.BaseURLEnv] {
+			baseURLsSet[entry.BaseURLEnv] = true
+			env = append(env, corev1.EnvVar{
+				Name:  entry.BaseURLEnv,
+				Value: fmt.Sprintf("http://127.0.0.1:%d/t/%s", port, entry.PrimaryHost),
+			})
+		}
+	}
+	return env, nil
 }
 
 type execResult struct {
@@ -185,14 +290,41 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	if image == "" {
 		image = d.opts.Image
 	}
+	sandboxEnv, err := d.injectedEnv()
+	if err != nil {
+		return engine.TurnResponse{}, err
+	}
 	podSpec := corev1.PodSpec{
 		Containers: []corev1.Container{{
 			Name:       container,
 			Image:      image,
 			Command:    []string{"sleep", "infinity"},
-			Env:        d.injectedEnv(),
+			Env:        sandboxEnv,
 			WorkingDir: engine.Workspace,
 		}},
+	}
+	if d.opts.Injector.Enabled {
+		sidecarRestart := corev1.ContainerRestartPolicyAlways
+		automount := false
+		podSpec.AutomountServiceAccountToken = &automount
+		sidecarEnv := []corev1.EnvVar{}
+		for _, name := range []string{"HATCHET_CLIENT_TOKEN", "HATCHET_CLIENT_TLS_STRATEGY"} {
+			if v, ok := os.LookupEnv(name); ok {
+				sidecarEnv = append(sidecarEnv, corev1.EnvVar{Name: name, Value: v})
+			}
+		}
+		podSpec.InitContainers = []corev1.Container{{
+			Name:          "injector",
+			Image:         d.opts.Injector.Image,
+			Args:          []string{"injector", "serve", "--listen", fmt.Sprintf("127.0.0.1:%d", d.opts.Injector.Port)},
+			RestartPolicy: &sidecarRestart,
+			Env:           sidecarEnv,
+			EnvFrom: []corev1.EnvFromSource{{
+				SecretRef: &corev1.SecretEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: d.opts.Injector.SecretName},
+				},
+			}},
+		}}
 	}
 	if d.opts.Overlay {
 		podSpec.Volumes = []corev1.Volume{{

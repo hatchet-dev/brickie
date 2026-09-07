@@ -23,6 +23,11 @@ sandbox:
 objectStore: ""
 objectStoreSecret: ""
 
+injector:
+  enabled: false
+  secret: ""
+  image: ""
+
 csi:
   enabled: false
   dataDir: /var/lib/brickie
