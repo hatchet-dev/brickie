@@ -15,6 +15,7 @@ import (
 	"github.com/hatchet-dev/brickie/internal/driver/kubernetes"
 	"github.com/hatchet-dev/brickie/internal/driver/local"
 	"github.com/hatchet-dev/brickie/internal/engine"
+	"github.com/hatchet-dev/brickie/internal/injector"
 	"github.com/hatchet-dev/brickie/internal/overlay"
 )
 
@@ -81,6 +82,9 @@ func (c providerConfig) buildDriver() (engine.Driver, error) {
 			if name = strings.TrimSpace(name); name != "" {
 				creds = append(creds, name)
 			}
+		}
+		if err := injector.ExtendCatalog(os.Getenv("BRICKIE_INJECTOR_CATALOG")); err != nil {
+			return nil, err
 		}
 		return kubernetes.New(kubernetes.Options{
 			Context:     c.kubeContext,

@@ -59,6 +59,10 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.injector.secret }}
                   key: BRICKIE_INJECTOR_PUBLIC_KEY
+            {{- if .Values.injector.catalog }}
+            - name: BRICKIE_INJECTOR_CATALOG
+              value: {{ .Values.injector.catalog | toJson | quote }}
+            {{- end }}
             {{- end }}
             - name: BRICKIE_SLOTS
               value: {{ .Values.slots | quote }}

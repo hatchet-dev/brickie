@@ -27,6 +27,7 @@ injector:
   enabled: false
   secret: ""
   image: ""
+  catalog: {}
 
 csi:
   enabled: false

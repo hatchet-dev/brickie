@@ -37,6 +37,7 @@ Build binaries to /tmp or use `go install`, do not commit binaries.
 - Linux-only syscalls (mounts, syncfs) live behind `//go:build linux` with stubs for other platforms. The repo must build on macOS.
 - Do not add code comments except where the code cannot express a constraint. No comments explaining what the next line does.
 - First version of anything new is 0.1.0.
+- `helm/brickie/values.schema.json` must always exist and stay in sync with `values.yaml`: every new value gets a schema entry in the same change, and the schema keeps `additionalProperties: false` at the top level so typos fail at install time.
 - The sandbox `image` option means an sbx template on the local driver and a container image on the kubernetes driver. Turn timeouts and default images are provider settings, not SDK settings.
 
 ## Environment notes
