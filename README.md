@@ -79,6 +79,23 @@ When `HATCHET_CLIENT_TOKEN` is set, the SDK does not start anything. It triggers
 
 If you develop hatchet locally with mkcert, run `unset HATCHET_CLIENT_TLS_ROOT_CA_FILE` before connecting to Hatchet Cloud. Otherwise the gRPC connection fails with a TLS error.
 
+## Claude Managed Agents
+
+Claude Managed Agents run the agent loop on Anthropic's orchestration layer. With a self-hosted environment, tool execution moves to infrastructure you control: a worker polls Anthropic's work queue and runs bash and file tools locally. brickie is that infrastructure. Each managed agent run executes inside a brickie sandbox as one durable Hatchet turn, so the agent's workspace lives in your cluster, is snapshotted after every run, and can be resumed or forked like any other brickie session.
+
+Setup:
+
+1. Create a self-hosted environment: `ant beta:environments create <<< '{"name":"brickie-byoc","config":{"type":"self_hosted"}}'`
+2. Generate an environment key for it in the Claude Console, on the environment page.
+3. Export `ANTHROPIC_ENVIRONMENT_ID`, `ANTHROPIC_ENVIRONMENT_KEY`, and `ANTHROPIC_API_KEY`.
+4. Run the brickie provider with the environment credentials injected into sandboxes: `--credentials ANTHROPIC_ENVIRONMENT_KEY,ANTHROPIC_ENVIRONMENT_ID`, or `sandbox.credentials` in the Helm chart.
+
+```bash
+cd examples/typescript && pnpm managed-agent
+```
+
+The example creates a managed agent once (reuse it with `BRICKIE_MANAGED_AGENT_ID`), starts a session, and drives two turns. For each turn it sends a user message, then runs a `managed-agent-turn` durable task whose sandbox function drains the environment work queue and services the run with the workspace as the tool working directory. The second turn restores the first turn's snapshot, so the agent sees the files it wrote earlier. Give the example a dedicated environment: a turn services whatever work is queued on the environment, so sessions from elsewhere would be picked up too.
+
 ## Worker options
 
 `brickie worker` reads flags or environment variables:

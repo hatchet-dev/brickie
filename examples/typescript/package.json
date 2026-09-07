@@ -10,9 +10,11 @@
     "resume": "tsx resume.ts",
     "loadtest": "tsx loadtest.ts",
     "e2b": "tsx e2b.ts",
-    "e2b-harness": "tsx e2b-harness.ts"
+    "e2b-harness": "tsx e2b-harness.ts",
+    "managed-agent": "tsx managed-agent.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.124.0",
     "@hatchet/sandbox": "file:../../sdks/typescript",
     "@hatchet-dev/typescript-sdk": "^1.29.1"
   },
