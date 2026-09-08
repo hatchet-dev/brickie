@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -67,11 +68,11 @@ func (m *Manager) lowerdirOption(chain []string) (string, error) {
 		return empty, err
 	}
 	dirs := make([]string, 0, len(chain))
-	for i := len(chain) - 1; i >= 0; i-- {
-		if err := m.Store.Materialize(chain[i]); err != nil {
+	for _, c := range slices.Backward(chain) {
+		if err := m.Store.Materialize(c); err != nil {
 			return "", err
 		}
-		dirs = append(dirs, m.Store.LayerDir(chain[i]))
+		dirs = append(dirs, m.Store.LayerDir(c))
 	}
 	return strings.Join(dirs, ":"), nil
 }

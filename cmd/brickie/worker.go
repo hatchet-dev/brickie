@@ -79,7 +79,7 @@ func (c providerConfig) buildDriver() (engine.Driver, error) {
 		return local.New(), nil
 	case "kubernetes":
 		creds := []string{}
-		for _, name := range strings.Split(c.credentials, ",") {
+		for name := range strings.SplitSeq(c.credentials, ",") {
 			if name = strings.TrimSpace(name); name != "" {
 				creds = append(creds, name)
 			}

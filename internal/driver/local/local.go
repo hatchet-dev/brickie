@@ -42,8 +42,7 @@ func runSbx(ctx context.Context, args ...string) (execResult, error) {
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	res := execResult{Stdout: stdout.String(), Stderr: stderr.String()}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		res.ExitCode = exitErr.ExitCode()
 		return res, nil
 	}

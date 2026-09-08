@@ -31,15 +31,15 @@ type SandboxSessionStatus struct {
 
 type SandboxSession struct {
 	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
+	metav1.ObjectMeta `json:"metadata"`
 
 	Spec   SandboxSessionSpec   `json:"spec"`
-	Status SandboxSessionStatus `json:"status,omitempty"`
+	Status SandboxSessionStatus `json:"status"`
 }
 
 type SandboxSessionList struct {
 	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
+	metav1.ListMeta `json:"metadata"`
 	Items           []SandboxSession `json:"items"`
 }
 
@@ -56,14 +56,14 @@ type WorkspaceSnapshotStatus struct {
 
 type WorkspaceSnapshot struct {
 	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
+	metav1.ObjectMeta `json:"metadata"`
 
 	Spec   WorkspaceSnapshotSpec   `json:"spec"`
-	Status WorkspaceSnapshotStatus `json:"status,omitempty"`
+	Status WorkspaceSnapshotStatus `json:"status"`
 }
 
 type WorkspaceSnapshotList struct {
 	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
+	metav1.ListMeta `json:"metadata"`
 	Items           []WorkspaceSnapshot `json:"items"`
 }

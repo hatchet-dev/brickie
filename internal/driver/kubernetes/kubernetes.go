@@ -241,8 +241,7 @@ func (d *Driver) exec(ctx context.Context, pod string, command []string, stdin [
 	}
 	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: in, Stdout: &stdout, Stderr: &stderr})
 	res := execResult{Stdout: stdout.Bytes(), Stderr: stderr.String()}
-	var codeErr k8sexec.CodeExitError
-	if errors.As(err, &codeErr) {
+	if codeErr, ok := errors.AsType[k8sexec.CodeExitError](err); ok {
 		res.ExitCode = codeErr.Code
 		return res, nil
 	}

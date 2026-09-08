@@ -49,7 +49,7 @@ func bootstrapKindCmd() *cobra.Command {
 			say("Kind cluster %q", cluster)
 			clusters, _ := output("kind", "get", "clusters")
 			exists := false
-			for _, c := range strings.Split(strings.TrimSpace(clusters), "\n") {
+			for c := range strings.SplitSeq(strings.TrimSpace(clusters), "\n") {
 				if c == cluster {
 					exists = true
 				}
