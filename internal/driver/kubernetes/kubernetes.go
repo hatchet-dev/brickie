@@ -265,15 +265,19 @@ func (d *Driver) mustExec(ctx context.Context, pod string, command []string, std
 
 func (d *Driver) waitReady(ctx context.Context, pod string) error {
 	deadline := time.Now().Add(d.opts.ReadyTimeout)
+	var last *corev1.Pod
 	for time.Now().Before(deadline) {
 		p, err := d.clientset.CoreV1().Pods(d.opts.Namespace).Get(ctx, pod, metav1.GetOptions{})
-		if err == nil && p.Status.Phase == corev1.PodRunning {
-			ready := len(p.Status.ContainerStatuses) > 0
-			for _, cs := range p.Status.ContainerStatuses {
-				ready = ready && cs.Ready
-			}
-			if ready {
-				return nil
+		if err == nil {
+			last = p
+			if p.Status.Phase == corev1.PodRunning {
+				ready := len(p.Status.ContainerStatuses) > 0
+				for _, cs := range p.Status.ContainerStatuses {
+					ready = ready && cs.Ready
+				}
+				if ready {
+					return nil
+				}
 			}
 		}
 		select {
@@ -282,7 +286,28 @@ func (d *Driver) waitReady(ctx context.Context, pod string) error {
 		case <-time.After(2 * time.Second):
 		}
 	}
-	return fmt.Errorf("sandbox pod %s not ready within %s", pod, d.opts.ReadyTimeout)
+	return fmt.Errorf("sandbox pod %s not ready within %s (%s)", pod, d.opts.ReadyTimeout, podStateSummary(last))
+}
+
+func podStateSummary(p *corev1.Pod) string {
+	if p == nil {
+		return "pod not found"
+	}
+	parts := []string{"phase=" + string(p.Status.Phase)}
+	for _, cs := range append(p.Status.InitContainerStatuses, p.Status.ContainerStatuses...) {
+		switch {
+		case cs.State.Waiting != nil:
+			parts = append(parts, fmt.Sprintf("%s=%s: %s", cs.Name, cs.State.Waiting.Reason, cs.State.Waiting.Message))
+		case cs.State.Terminated != nil:
+			parts = append(parts, fmt.Sprintf("%s=terminated(%s, exit %d)", cs.Name, cs.State.Terminated.Reason, cs.State.Terminated.ExitCode))
+		}
+	}
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status != corev1.ConditionTrue {
+			parts = append(parts, "unschedulable: "+c.Message)
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.TurnResponse, error) {
@@ -355,13 +380,18 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	if err := d.client.Create(ctx, sb); err != nil {
 		return engine.TurnResponse{}, fmt.Errorf("create sandbox: %w", err)
 	}
+	req.Logf("sandbox %s created in namespace %s", req.SandboxName, d.opts.Namespace)
 	defer func() {
 		_ = d.client.Delete(context.Background(), sb)
+		req.Logf("sandbox %s deleted", req.SandboxName)
 	}()
 
+	waitStart := time.Now()
 	if err := d.waitReady(ctx, req.SandboxName); err != nil {
+		req.Logf("sandbox %s not ready: %v", req.SandboxName, err)
 		return engine.TurnResponse{}, err
 	}
+	req.Logf("sandbox %s ready after %s", req.SandboxName, time.Since(waitStart).Round(time.Millisecond))
 	if !d.opts.Overlay {
 		if _, err := d.mustExec(ctx, req.SandboxName, []string{"mkdir", "-p", engine.Workspace}, nil); err != nil {
 			return engine.TurnResponse{}, err
@@ -370,9 +400,11 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 			if _, err := d.mustExec(ctx, req.SandboxName, []string{"tar", "-xzf", "-", "-C", engine.Workspace}, req.SnapshotTar); err != nil {
 				return engine.TurnResponse{}, fmt.Errorf("restore snapshot: %w", err)
 			}
+			req.Logf("workspace restored from snapshot tar")
 		}
 	}
 
+	execStart := time.Now()
 	var output any
 	switch req.Fn {
 	case engine.CommandFn:
@@ -436,14 +468,17 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		}
 	}
 
+	req.Logf("fn %s executed in %s", req.Fn, time.Since(execStart).Round(time.Millisecond))
 	outJSON, err := json.Marshal(output)
 	if err != nil {
 		return engine.TurnResponse{}, err
 	}
 	if d.opts.Overlay {
 		if err := d.checkpoint(ctx, req.SandboxName, req.CheckpointID); err != nil {
+			req.Logf("overlay checkpoint %s failed: %v", req.CheckpointID, err)
 			return engine.TurnResponse{}, err
 		}
+		req.Logf("overlay checkpoint %s complete", req.CheckpointID)
 		return engine.TurnResponse{Output: outJSON}, nil
 	}
 	tar, err := d.mustExec(ctx, req.SandboxName, []string{"tar", "-czf", "-", "-C", engine.Workspace, "."}, nil)

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/hatchet-dev/brickie/internal/engine"
 )
@@ -111,10 +112,13 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	if _, err := sbx(ctx, createArgs...); err != nil {
 		return engine.TurnResponse{}, err
 	}
+	req.Logf("sbx sandbox %s created", req.SandboxName)
 	defer func() {
 		_, _ = runSbx(context.Background(), "rm", "-f", req.SandboxName)
+		req.Logf("sbx sandbox %s removed", req.SandboxName)
 	}()
 
+	execStart := time.Now()
 	var output any
 	switch req.Fn {
 	case engine.CommandFn:
@@ -161,6 +165,7 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		output = json.RawMessage(raw)
 	}
 
+	req.Logf("fn %s executed in %s", req.Fn, time.Since(execStart).Round(time.Millisecond))
 	outJSON, err := json.Marshal(output)
 	if err != nil {
 		return engine.TurnResponse{}, err

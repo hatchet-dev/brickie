@@ -7,6 +7,13 @@
   "scripts": {
     "typecheck": "tsc"
   },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.0.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.221.0",
+    "@opentelemetry/instrumentation": "^0.221.0",
+    "@opentelemetry/sdk-trace-base": "^2.0.0"
+  },
   "peerDependencies": {
     "@hatchet-dev/typescript-sdk": ">=1.29.1"
   },

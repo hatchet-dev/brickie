@@ -72,7 +72,8 @@ async function readFileB64(session: BackendSession, workspace: string, path: str
 export async function runTurnOnBackend(
   backend: SandboxBackend,
   turn: SandboxTurnInput,
-  credentials: string[] = []
+  credentials: string[] = [],
+  log: (message: string) => void = () => {}
 ): Promise<TurnResult> {
   const env: Record<string, string> = {};
   for (const name of credentials) {
@@ -81,11 +82,14 @@ export async function runTurnOnBackend(
       env[name] = value;
     }
   }
+  log(`turn start: backend=${backend.name} fn=${turn.fn} image=${turn.image ?? 'default'} snapshot=${turn.snapshotId ?? 'none'}`);
+  const createStart = Date.now();
   const session = await backend.createSession({
     image: turn.image as string | undefined,
     snapshotId: turn.snapshotId as string | undefined,
     env,
   });
+  log(`backend session ready after ${Date.now() - createStart}ms`);
   try {
     const workspace = (await mustExec(session, 'pwd')).stdout.trim() || '/';
     const input = (turn.input ?? {}) as JsonObject;
@@ -129,9 +133,12 @@ export async function runTurnOnBackend(
       await session.exec(inWorkspace(workspace, 'rm -rf .brickie'));
     }
 
+    log(`fn ${turn.fn} executed`);
     const snapshotId = await session.checkpoint();
+    log(`snapshot ${snapshotId} stored`);
     return { output, snapshotId };
   } finally {
     await session.destroy().catch(() => {});
+    log('backend session destroyed');
   }
 }

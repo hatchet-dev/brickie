@@ -10,6 +10,7 @@ import (
 
 	"github.com/hatchet-dev/hatchet/pkg/cmdutils"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
+	hatchetotel "github.com/hatchet-dev/hatchet/sdks/go/opentelemetry"
 	"github.com/spf13/cobra"
 
 	"github.com/hatchet-dev/brickie/internal/driver/kubernetes"
@@ -130,6 +131,17 @@ func runProvider(ctx context.Context, c providerConfig) error {
 	w, err := client.NewWorker("brickie-provider", hatchet.WithWorkflows(task), hatchet.WithDurableSlots(c.slots))
 	if err != nil {
 		return err
+	}
+	if os.Getenv("BRICKIE_OTEL") != "false" {
+		instrumentor, err := hatchetotel.NewInstrumentor()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "brickie: opentelemetry disabled: %v\n", err)
+		} else {
+			w.Use(instrumentor.Middleware())
+			defer func() {
+				_ = instrumentor.Shutdown(context.Background())
+			}()
+		}
 	}
 	fmt.Fprintf(os.Stderr, "brickie: sandbox provider started (driver=%s)\n", c.driver)
 	return w.StartBlocking(ctx)

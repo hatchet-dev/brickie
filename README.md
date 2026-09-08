@@ -167,6 +167,16 @@ The Python SDK exposes `Sandbox` with `execute_command`, `execute_prompt`, and `
 
 Turn timeouts and default images are provider settings, not SDK settings. Set them on `brickie worker` or in the Helm chart values.
 
+## Observability
+
+Every turn streams logs and traces to Hatchet Cloud, visible on the run in the dashboard.
+
+- The provider logs each phase of a turn: image resolution, snapshot restore with size, pod or sbx sandbox lifecycle, ready wait duration, execution time, and checkpoint. When a sandbox pod never becomes ready, the error includes the pod phase, container states, and scheduling conditions.
+- The worker registers Hatchet's OpenTelemetry instrumentor, so every task run produces spans sent to Hatchet's OTLP collector. Connection settings come from the same `HATCHET_CLIENT_*` variables the worker already uses.
+- The TypeScript SDK registers the instrumentor on the client side too, so triggering spans link to worker spans through traceparent propagation, and third-party backend turns log the backend session lifecycle. Every spawned turn carries `brickie.fn`, `brickie.image`, and `brickie.from` as run metadata for filtering in the dashboard.
+
+Set `BRICKIE_OTEL=false` to disable tracing on either side. Log lines always flow.
+
 ## Snapshots
 
 A snapshot is a gzipped tar of the workspace, stored by the provider under `--snapshot-dir` and named after the run id of the turn that produced it. Snapshots are immutable. Retried turns overwrite their own snapshot, so replays are safe.

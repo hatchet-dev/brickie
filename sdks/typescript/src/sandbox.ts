@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { Duration, DurableContext, HatchetClient, JsonObject } from '@hatchet-dev/typescript-sdk/v1';
 import type { SandboxBackend } from './backend.js';
+import { setupTelemetry } from './otel.js';
 
 export const SANDBOX_TASK_NAME = 'brickie-sandbox';
 
@@ -85,11 +86,12 @@ function ensureBackendProvider(
   }
   backendProvidersStarted.add(backend.name);
   void (async () => {
+    await setupTelemetry();
     const { runTurnOnBackend } = await import('./backend.js');
     const task = hatchet.durableTask<SandboxTurnInput, TurnResult>({
       name: SANDBOX_TASK_NAME,
       executionTimeout: turnTimeout ?? '15m',
-      fn: (turn) => runTurnOnBackend(backend, turn, credentials),
+      fn: (turn, ctx) => runTurnOnBackend(backend, turn, credentials, (message) => void ctx.log(message)),
     });
     const worker = await hatchet.worker(`brickie-${backend.name}-provider`, { workflows: [task] });
     void worker.start();
@@ -97,6 +99,7 @@ function ensureBackendProvider(
 }
 
 export function sandbox(hatchet: HatchetClient, opts: SandboxOpts = {}) {
+  void setupTelemetry();
   if (opts.backend) {
     ensureBackendProvider(hatchet, opts.backend, opts.credentials ?? [], opts.turnTimeout);
   } else {
@@ -118,9 +121,16 @@ export function sandbox(hatchet: HatchetClient, opts: SandboxOpts = {}) {
     ...(from ? { snapshotId: from } : {}),
   });
 
+  const turnMetadata = (turnInput: SandboxTurnInput): Record<string, string> => ({
+    'brickie.fn': turnInput.fn,
+    ...(turnInput.image ? { 'brickie.image': turnInput.image } : {}),
+    ...(turnInput.snapshotId ? { 'brickie.from': turnInput.snapshotId } : {}),
+  });
+
   const spawnTurn = (ctx: Ctx, turnInput: SandboxTurnInput, key?: string): Promise<TurnResult> =>
     ctx.spawnChild<SandboxTurnInput, TurnResult>(SANDBOX_TASK_NAME, turnInput, {
       key: key ?? nextKey(ctx),
+      additionalMetadata: turnMetadata(turnInput),
     });
 
   const itemToTurn = (item: ExecuteItem): SandboxTurnInput => {
@@ -149,11 +159,14 @@ export function sandbox(hatchet: HatchetClient, opts: SandboxOpts = {}) {
       spawnTurn(ctx, turn(PROMPT_FN, { prompt }, execOpts.from), execOpts.key),
     executeAll: (ctx: Ctx, items: ExecuteItem[]): Promise<TurnResult[]> =>
       ctx.spawnChildren<SandboxTurnInput, TurnResult>(
-        items.map((item) => ({
-          workflow: SANDBOX_TASK_NAME,
-          input: itemToTurn(item),
-          options: { key: nextKey(ctx) },
-        }))
+        items.map((item) => {
+          const turnInput = itemToTurn(item);
+          return {
+            workflow: SANDBOX_TASK_NAME,
+            input: turnInput,
+            options: { key: nextKey(ctx), additionalMetadata: turnMetadata(turnInput) },
+          };
+        })
       ),
   };
 }

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 )
 
 const TaskName = "brickie-sandbox"
@@ -34,6 +35,13 @@ type TurnRequest struct {
 	SnapshotTar  []byte
 	SnapshotID   string
 	CheckpointID string
+	Log          func(message string)
+}
+
+func (r TurnRequest) Logf(format string, args ...any) {
+	if r.Log != nil {
+		r.Log(fmt.Sprintf(format, args...))
+	}
 }
 
 type TurnResponse struct {
