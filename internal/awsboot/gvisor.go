@@ -17,34 +17,51 @@ import (
 const gvisorRelease = "20260817.0"
 
 const gvisorInstallScript = `set -e
-if [ -x /host/usr/local/bin/runsc ] && [ -f /host/etc/containerd/config.d/99-gvisor.toml ]; then
+CONFIG=/host/etc/containerd/config.toml
+configured() {
+  grep -q 'runtimes.runsc' $CONFIG 2>/dev/null && return 0
+  grep -q 'config\.d' $CONFIG 2>/dev/null && [ -f /host/etc/containerd/config.d/99-gvisor.toml ]
+}
+if [ -x /host/usr/local/bin/runsc ] && configured; then
   echo "gvisor already installed"
 else
   apk add --no-cache util-linux >/dev/null
-  ARCH=$(uname -m)
-  BASE=https://storage.googleapis.com/gvisor/releases/release/RELEASE/$ARCH
-  cd /tmp
-  for f in runsc containerd-shim-runsc-v1; do
-    if ! wget -q $BASE/$f -O $f || ! wget -q $BASE/$f.sha512 -O $f.sha512; then
-      BASE=https://storage.googleapis.com/gvisor/releases/release/latest/$ARCH
-      wget -q $BASE/$f -O $f
-      wget -q $BASE/$f.sha512 -O $f.sha512
-    fi
-    sha512sum -c $f.sha512
-    chmod +x $f
-    mv $f /host/usr/local/bin/$f
-    rm -f $f.sha512
-  done
-  mkdir -p /host/etc/containerd/config.d
-  if chroot /host containerd --version 2>/dev/null | grep -q ' v2'; then
+  if [ ! -x /host/usr/local/bin/runsc ]; then
+    ARCH=$(uname -m)
+    BASE=https://storage.googleapis.com/gvisor/releases/release/RELEASE/$ARCH
+    cd /tmp
+    for f in runsc containerd-shim-runsc-v1; do
+      if ! wget -q $BASE/$f -O $f || ! wget -q $BASE/$f.sha512 -O $f.sha512; then
+        BASE=https://storage.googleapis.com/gvisor/releases/release/latest/$ARCH
+        wget -q $BASE/$f -O $f
+        wget -q $BASE/$f.sha512 -O $f.sha512
+      fi
+      sha512sum -c $f.sha512
+      chmod +x $f
+      mv $f /host/usr/local/bin/$f
+      rm -f $f.sha512
+    done
+  fi
+  if grep -Eq '^version *= *3' $CONFIG 2>/dev/null; then
+    TABLE='io.containerd.cri.v1.runtime'
+  elif grep -Eq '^version *= *2' $CONFIG 2>/dev/null; then
+    TABLE='io.containerd.grpc.v1.cri'
+  elif chroot /host containerd --version 2>/dev/null | grep -q ' v2'; then
     TABLE='io.containerd.cri.v1.runtime'
   else
     TABLE='io.containerd.grpc.v1.cri'
   fi
-  printf '[plugins."%s".containerd.runtimes.runsc]\n  runtime_type = "io.containerd.runsc.v1"\n' "$TABLE" > /host/etc/containerd/config.d/99-gvisor.toml
+  BLOCK=$(printf '[plugins."%s".containerd.runtimes.runsc]\n  runtime_type = "io.containerd.runsc.v1"' "$TABLE")
+  if grep -q 'config\.d' $CONFIG 2>/dev/null; then
+    mkdir -p /host/etc/containerd/config.d
+    printf '%s\n' "$BLOCK" > /host/etc/containerd/config.d/99-gvisor.toml
+  elif ! grep -q 'runtimes.runsc' $CONFIG 2>/dev/null; then
+    printf '\n%s\n' "$BLOCK" >> $CONFIG
+  fi
   nsenter -t 1 -m -- systemctl restart containerd
   echo "gvisor installed"
 fi
+touch /tmp/gvisor-ready
 while true; do sleep 3600; done`
 
 func EnsureGVisor(ctx context.Context, clientset *kubernetes.Clientset) error {
@@ -75,6 +92,12 @@ func EnsureGVisor(ctx context.Context, clientset *kubernetes.Clientset) error {
 						Command:         []string{"/bin/sh", "-c", strings.ReplaceAll(gvisorInstallScript, "RELEASE", gvisorRelease)},
 						SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
 						VolumeMounts:    []corev1.VolumeMount{{Name: "host", MountPath: "/host"}},
+						ReadinessProbe: &corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								Exec: &corev1.ExecAction{Command: []string{"test", "-f", "/tmp/gvisor-ready"}},
+							},
+							PeriodSeconds: 5,
+						},
 					}},
 					Volumes: []corev1.Volume{{
 						Name: "host",

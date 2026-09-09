@@ -9,9 +9,38 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 )
+
+const nodeLaunchTemplate = "brickie-node"
+
+// ensureLaunchTemplate exists to raise the IMDS hop limit to 2: EKS nodes
+// default to 1, which leaves pods (the CSI node's S3 offload, the provider)
+// without instance-role credentials.
+func (b *Bootstrapper) ensureLaunchTemplate(ctx context.Context) (string, error) {
+	out, err := b.EC2.CreateLaunchTemplate(ctx, &ec2.CreateLaunchTemplateInput{
+		LaunchTemplateName: aws.String(nodeLaunchTemplate),
+		LaunchTemplateData: &ec2types.RequestLaunchTemplateData{
+			MetadataOptions: &ec2types.LaunchTemplateInstanceMetadataOptionsRequest{
+				HttpTokens:              ec2types.LaunchTemplateHttpTokensStateRequired,
+				HttpPutResponseHopLimit: aws.Int32(2),
+			},
+		},
+	})
+	if err == nil {
+		return aws.ToString(out.LaunchTemplate.LaunchTemplateId), nil
+	}
+	desc, derr := b.EC2.DescribeLaunchTemplates(ctx, &ec2.DescribeLaunchTemplatesInput{
+		LaunchTemplateNames: []string{nodeLaunchTemplate},
+	})
+	if derr != nil || len(desc.LaunchTemplates) == 0 {
+		return "", fmt.Errorf("create launch template: %w", err)
+	}
+	return aws.ToString(desc.LaunchTemplates[0].LaunchTemplateId), nil
+}
 
 var gravitonFamily = regexp.MustCompile(`^[a-z]+[0-9]+[a-z]*g`)
 
@@ -63,13 +92,18 @@ func (b *Bootstrapper) CreateNodegroup(ctx context.Context, cluster, nodeRoleARN
 	if IsGraviton(instanceType) {
 		amiType = ekstypes.AMITypesAl2023Arm64Standard
 	}
-	_, err := b.EKS.CreateNodegroup(ctx, &eks.CreateNodegroupInput{
-		ClusterName:   aws.String(cluster),
-		NodegroupName: aws.String("brickie-default"),
-		NodeRole:      aws.String(nodeRoleARN),
-		Subnets:       subnetIDs,
-		InstanceTypes: []string{instanceType},
-		AmiType:       amiType,
+	ltID, err := b.ensureLaunchTemplate(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = b.EKS.CreateNodegroup(ctx, &eks.CreateNodegroupInput{
+		ClusterName:    aws.String(cluster),
+		NodegroupName:  aws.String("brickie-default"),
+		NodeRole:       aws.String(nodeRoleARN),
+		Subnets:        subnetIDs,
+		InstanceTypes:  []string{instanceType},
+		AmiType:        amiType,
+		LaunchTemplate: &ekstypes.LaunchTemplateSpecification{Id: aws.String(ltID)},
 		ScalingConfig: &ekstypes.NodegroupScalingConfig{
 			MinSize:     aws.Int32(1),
 			MaxSize:     aws.Int32(max(nodeCount, 1)),

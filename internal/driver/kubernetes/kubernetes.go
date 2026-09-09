@@ -298,6 +298,24 @@ func (d *Driver) mustExec(ctx context.Context, pod string, command []string, std
 	return res, nil
 }
 
+func (d *Driver) podWarnings(ctx context.Context, pod string) string {
+	events, err := d.clientset.CoreV1().Events(d.opts.Namespace).List(ctx, metav1.ListOptions{
+		FieldSelector: "involvedObject.name=" + pod + ",type=Warning",
+	})
+	if err != nil || len(events.Items) == 0 {
+		return ""
+	}
+	items := events.Items
+	if len(items) > 3 {
+		items = items[len(items)-3:]
+	}
+	msgs := make([]string, 0, len(items))
+	for _, e := range items {
+		msgs = append(msgs, e.Reason+": "+e.Message)
+	}
+	return strings.Join(msgs, "; ")
+}
+
 func (d *Driver) waitReady(ctx context.Context, pod string) error {
 	deadline := time.Now().Add(d.opts.ReadyTimeout)
 	var last *corev1.Pod
@@ -314,6 +332,11 @@ func (d *Driver) waitReady(ctx context.Context, pod string) error {
 					return nil
 				}
 			}
+			if p.Status.Phase == corev1.PodPending {
+				if w := d.podWarnings(ctx, pod); isRuntimeHandlerError(errors.New(w)) {
+					return fmt.Errorf("sandbox pod %s cannot start: %s", pod, w)
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -321,7 +344,11 @@ func (d *Driver) waitReady(ctx context.Context, pod string) error {
 		case <-time.After(2 * time.Second):
 		}
 	}
-	return fmt.Errorf("sandbox pod %s not ready within %s (%s)", pod, d.opts.ReadyTimeout, podStateSummary(last))
+	detail := podStateSummary(last)
+	if w := d.podWarnings(ctx, pod); w != "" {
+		detail += "; " + w
+	}
+	return fmt.Errorf("sandbox pod %s not ready within %s (%s)", pod, d.opts.ReadyTimeout, detail)
 }
 
 func runtimeName(gvisor bool) string {
