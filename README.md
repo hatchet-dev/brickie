@@ -96,6 +96,31 @@ cd examples/typescript && pnpm managed-agent
 
 The example creates a managed agent once (reuse it with `BRICKIE_MANAGED_AGENT_ID`), starts a session, and drives two turns. For each turn it sends a user message, then runs a `managed-agent-turn` durable task whose sandbox function drains the environment work queue and services the run with the workspace as the tool working directory. The second turn restores the first turn's snapshot, so the agent sees the files it wrote earlier. Give the example a dedicated environment: a turn services whatever work is queued on the environment, so sessions from elsewhere would be picked up too.
 
+## AWS mode
+
+`brickie bootstrap-aws` takes you from AWS credentials to a running brickie install on EKS. It talks to AWS through the SDK and installs the chart through the Helm SDK, so the only tool it needs is Docker, for building and pushing the provider image. No eksctl, kubectl, or helm binaries are required. Run it interactively and it asks for the region, whether to create a new cluster or reuse an existing one, and the node shape. Every question also has a flag, so CI can run it non-interactively:
+
+```bash
+export HATCHET_CLIENT_TOKEN=<token>
+brickie bootstrap-aws                      # interactive
+brickie bootstrap-aws --region us-east-1 --cluster-name brickie --node-count 2
+brickie bootstrap-aws --region us-east-1 --existing-cluster my-cluster
+```
+
+The create path provisions IAM roles, an EKS cluster in the default VPC, a managed nodegroup, an ECR repository, and an S3 snapshot bucket, then builds and pushes the provider image and installs the chart with overlayfs and S3 snapshots enabled. The existing path skips cluster creation and grants your IAM principal cluster admin through an EKS access entry when needed. Both paths update your kubeconfig with an `aws eks get-token` entry.
+
+## gVisor
+
+bootstrap-aws installs gVisor (runsc) on every node through a DaemonSet and creates a `gvisor` RuntimeClass. The provider detects that runtime class at startup and runs every sandbox pod under gVisor, so agent code is isolated from the host kernel. Detection is controlled by `gvisor.mode` in the chart (`BRICKIE_GVISOR`, `--gvisor`):
+
+- `auto` (default): use gVisor when the `gvisor` runtime class exists, otherwise warn and use the default runtime. kind and other clusters without gVisor keep working unchanged.
+- `on`: fail at startup if the runtime class is missing.
+- `off`: never use gVisor.
+
+In `auto` mode, a pod that lands on a node without runsc (for example a fresh node the installer has not reached yet) is recreated once with the default runtime, and the downgrade is logged on the turn. Every turn logs which runtime it ran under. Overlayfs snapshots work unchanged under gVisor: layer assembly and checkpoints happen on the host, and the driver runs `sync` inside the sandbox before each checkpoint so buffered writes reach the workspace first.
+
+To verify a sandbox is running under gVisor, run a command turn with `dmesg | head`. gVisor prints its own boot lines instead of the host kernel's.
+
 ## Worker options
 
 `brickie worker` reads flags or environment variables:

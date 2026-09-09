@@ -15,6 +15,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -51,7 +52,10 @@ type Options struct {
 	Overlay      bool
 	CSIPort      int
 	Injector     InjectorOptions
+	GVisor       string
 }
+
+const gvisorRuntimeClass = "gvisor"
 
 const csiNodeLabel = "app.kubernetes.io/name=brickie-csi-node"
 
@@ -60,6 +64,7 @@ type Driver struct {
 	restCfg   *rest.Config
 	client    ctrlclient.Client
 	clientset *kubernetes.Clientset
+	gvisor    bool
 }
 
 func New(opts Options) (*Driver, error) {
@@ -102,7 +107,38 @@ func New(opts Options) (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Driver{opts: opts, restCfg: restCfg, client: c, clientset: cs}, nil
+	d := &Driver{opts: opts, restCfg: restCfg, client: c, clientset: cs}
+	if err := d.detectGVisor(); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+func (d *Driver) detectGVisor() error {
+	mode := d.opts.GVisor
+	if mode == "" {
+		mode = "auto"
+	}
+	switch mode {
+	case "off":
+		return nil
+	case "auto", "on":
+	default:
+		return fmt.Errorf("unknown gvisor mode %q (auto|on|off)", mode)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := d.clientset.NodeV1().RuntimeClasses().Get(ctx, gvisorRuntimeClass, metav1.GetOptions{})
+	if err == nil {
+		d.gvisor = true
+		fmt.Fprintf(os.Stderr, "brickie: gvisor runtime class found; sandboxes run under gVisor\n")
+		return nil
+	}
+	if mode == "on" {
+		return fmt.Errorf("gvisor mode is on but the %q runtime class is unavailable (%v): install runsc on the nodes and create the runtime class, or run brickie bootstrap-aws", gvisorRuntimeClass, err)
+	}
+	fmt.Fprintf(os.Stderr, "brickie: gvisor runtime class not found (%v); sandboxes run with the default runtime\n", err)
+	return nil
 }
 
 func loadConfig(kubeContext string) (*rest.Config, error) {
@@ -288,6 +324,39 @@ func (d *Driver) waitReady(ctx context.Context, pod string) error {
 	return fmt.Errorf("sandbox pod %s not ready within %s (%s)", pod, d.opts.ReadyTimeout, podStateSummary(last))
 }
 
+func runtimeName(gvisor bool) string {
+	if gvisor {
+		return gvisorRuntimeClass
+	}
+	return "default"
+}
+
+func isRuntimeHandlerError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "runsc") || strings.Contains(msg, "runtime handler")
+}
+
+func (d *Driver) deleteAndWait(ctx context.Context, sb *sandboxv1beta1.Sandbox) error {
+	if err := d.client.Delete(ctx, sb); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete sandbox %s: %w", sb.Name, err)
+	}
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		var existing sandboxv1beta1.Sandbox
+		crGone := apierrors.IsNotFound(d.client.Get(ctx, ctrlclient.ObjectKeyFromObject(sb), &existing))
+		_, podErr := d.clientset.CoreV1().Pods(d.opts.Namespace).Get(ctx, sb.Name, metav1.GetOptions{})
+		if crGone && apierrors.IsNotFound(podErr) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	return fmt.Errorf("sandbox %s did not terminate in time for runtime fallback", sb.Name)
+}
+
 func podStateSummary(p *corev1.Pod) string {
 	if p == nil {
 		return "pod not found"
@@ -368,27 +437,49 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 			MountPath: engine.Workspace,
 		}}
 	}
-	sb := &sandboxv1beta1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: req.SandboxName, Namespace: d.opts.Namespace},
-		Spec: sandboxv1beta1.SandboxSpec{
-			SandboxBlueprint: sandboxv1beta1.SandboxBlueprint{
-				PodTemplate: sandboxv1beta1.PodTemplate{Spec: podSpec},
-			},
-		},
+	useGvisor := d.gvisor
+	if useGvisor {
+		rc := gvisorRuntimeClass
+		podSpec.RuntimeClassName = &rc
 	}
+	newSandbox := func() *sandboxv1beta1.Sandbox {
+		return &sandboxv1beta1.Sandbox{
+			ObjectMeta: metav1.ObjectMeta{Name: req.SandboxName, Namespace: d.opts.Namespace},
+			Spec: sandboxv1beta1.SandboxSpec{
+				SandboxBlueprint: sandboxv1beta1.SandboxBlueprint{
+					PodTemplate: sandboxv1beta1.PodTemplate{Spec: podSpec},
+				},
+			},
+		}
+	}
+	sb := newSandbox()
 	if err := d.client.Create(ctx, sb); err != nil {
 		return engine.TurnResponse{}, fmt.Errorf("create sandbox: %w", err)
 	}
-	req.Logf("sandbox %s created in namespace %s", req.SandboxName, d.opts.Namespace)
+	req.Logf("sandbox %s created in namespace %s (runtime=%s)", req.SandboxName, d.opts.Namespace, runtimeName(useGvisor))
 	defer func() {
 		_ = d.client.Delete(context.Background(), sb)
 		req.Logf("sandbox %s deleted", req.SandboxName)
 	}()
 
 	waitStart := time.Now()
-	if err := d.waitReady(ctx, req.SandboxName); err != nil {
-		req.Logf("sandbox %s not ready: %v", req.SandboxName, err)
-		return engine.TurnResponse{}, err
+	readyErr := d.waitReady(ctx, req.SandboxName)
+	if readyErr != nil && useGvisor && d.opts.GVisor != "on" && isRuntimeHandlerError(readyErr) {
+		req.Logf("gvisor unavailable for %s (%v); retrying with the default runtime", req.SandboxName, readyErr)
+		if err := d.deleteAndWait(ctx, sb); err != nil {
+			return engine.TurnResponse{}, err
+		}
+		useGvisor = false
+		podSpec.RuntimeClassName = nil
+		sb = newSandbox()
+		if err := d.client.Create(ctx, sb); err != nil {
+			return engine.TurnResponse{}, fmt.Errorf("create sandbox: %w", err)
+		}
+		readyErr = d.waitReady(ctx, req.SandboxName)
+	}
+	if readyErr != nil {
+		req.Logf("sandbox %s not ready: %v", req.SandboxName, readyErr)
+		return engine.TurnResponse{}, readyErr
 	}
 	req.Logf("sandbox %s ready after %s", req.SandboxName, time.Since(waitStart).Round(time.Millisecond))
 	if !d.opts.Overlay {
@@ -473,6 +564,9 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		return engine.TurnResponse{}, err
 	}
 	if d.opts.Overlay {
+		if _, err := d.exec(ctx, req.SandboxName, []string{"sh", "-c", "sync"}, nil); err != nil {
+			req.Logf("pre-checkpoint sync failed: %v", err)
+		}
 		if err := d.checkpoint(ctx, req.SandboxName, req.CheckpointID); err != nil {
 			req.Logf("overlay checkpoint %s failed: %v", req.CheckpointID, err)
 			return engine.TurnResponse{}, err

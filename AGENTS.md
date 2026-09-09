@@ -4,7 +4,8 @@ brickie runs agent sandboxes as Hatchet durable tasks. Read `docs/ARCHITECTURE.m
 
 ## Layout
 
-- `cmd/brickie/`: cobra CLI (`worker`, `controller`, `csi-node`, `bootstrap-local`, `bootstrap-kind`)
+- `cmd/brickie/`: cobra CLI (`worker`, `controller`, `csi-node`, `bootstrap-local`, `bootstrap-kind`, `bootstrap-aws`)
+- `internal/awsboot/`: EKS bootstrap via aws-sdk-go-v2 (cluster, nodegroup, IAM, ECR, S3, gVisor installer)
 - `internal/engine/`: turn contract, durable task, snapshot store
 - `internal/driver/`: `local` (Docker Sandboxes via `sbx` CLI) and `kubernetes` (agent-sandbox CRs plus pod exec)
 - `internal/overlay/`: overlayfs layer store, mount/checkpoint/fork, object store offload

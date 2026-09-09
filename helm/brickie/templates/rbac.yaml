@@ -40,3 +40,29 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "brickie.fullname" . }}
     namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "brickie.fullname" . }}-cluster
+  labels:
+    {{- include "brickie.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "brickie.fullname" . }}-cluster
+  labels:
+    {{- include "brickie.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "brickie.fullname" . }}-cluster
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "brickie.fullname" . }}
+    namespace: {{ .Release.Namespace }}

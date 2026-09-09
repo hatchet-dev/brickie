@@ -44,6 +44,8 @@ spec:
             - name: BRICKIE_OVERLAY
               value: "true"
             {{- end }}
+            - name: BRICKIE_GVISOR
+              value: {{ .Values.gvisor.mode | quote }}
             {{- if .Values.injector.enabled }}
             {{- if not .Values.injector.secret }}
             {{- fail "injector.secret is required when injector.enabled: a Secret with BRICKIE_INJECTOR_PUBLIC_KEY and BRICKIE_INJECTOR_PRIVATE_KEY (run `brickie injector keygen`)" }}

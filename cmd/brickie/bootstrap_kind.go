@@ -26,6 +26,15 @@ func bootstrapKindCmd() *cobra.Command {
 		Short: "Create a kind cluster and deploy the sandbox provider with agent-sandbox via Helm",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if token == "" {
+				token = os.Getenv("HATCHET_CLIENT_TOKEN")
+			}
+			if anthropic == "" {
+				anthropic = os.Getenv("ANTHROPIC_API_KEY")
+			}
+			if claudeOAuth == "" {
+				claudeOAuth = os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
+			}
+			if token == "" {
 				return errors.New("HATCHET_CLIENT_TOKEN is required: export it or pass --hatchet-token")
 			}
 			say("Checking tools")
@@ -118,8 +127,8 @@ func bootstrapKindCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chart, "chart", "helm/brickie", "path to the brickie chart")
 	cmd.Flags().StringVar(&image, "image", "brickie-worker:latest", "provider image to build and load")
 	cmd.Flags().StringVar(&sandboxImg, "sandbox-image", "", "default sandbox image (chart default: alpine:3)")
-	cmd.Flags().StringVar(&token, "hatchet-token", os.Getenv("HATCHET_CLIENT_TOKEN"), "Hatchet client token")
-	cmd.Flags().StringVar(&anthropic, "anthropic-api-key", os.Getenv("ANTHROPIC_API_KEY"), "inject ANTHROPIC_API_KEY into sandboxes")
-	cmd.Flags().StringVar(&claudeOAuth, "claude-oauth-token", os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"), "inject CLAUDE_CODE_OAUTH_TOKEN into sandboxes")
+	cmd.Flags().StringVar(&token, "hatchet-token", "", "Hatchet client token (default $HATCHET_CLIENT_TOKEN)")
+	cmd.Flags().StringVar(&anthropic, "anthropic-api-key", "", "inject ANTHROPIC_API_KEY into sandboxes (default $ANTHROPIC_API_KEY)")
+	cmd.Flags().StringVar(&claudeOAuth, "claude-oauth-token", "", "inject CLAUDE_CODE_OAUTH_TOKEN into sandboxes (default $CLAUDE_CODE_OAUTH_TOKEN)")
 	return cmd
 }

@@ -18,6 +18,8 @@ Agent state has three layers. We snapshot the two cheap ones and defer the expen
 
 The durable log answers "what has the agent decided and observed". The filesystem snapshot answers "what does the world look like now". Every turn returns its snapshot id as part of the task output, so the durable log indexes the filesystem history.
 
+Sandbox pods run under gVisor when the cluster has a `gvisor` runtime class, which `brickie bootstrap-aws` installs on every node. The kubernetes driver detects the runtime class at startup (`gvisor.mode`: auto, on, off) and falls back to the default runtime per pod when a node lacks runsc, so the same chart works on kind. gVisor composes cleanly with the snapshot design because the overlay chain lives entirely on the host: the sentry only proxies file I/O into the merged mount through its gofer, and the driver runs `sync` inside the sandbox before each checkpoint so buffered writes land in the upper layer before the host syncfs and tar.
+
 ## Turn lifecycle
 
 A turn is one durable Hatchet task named `brickie-sandbox`. The input carries the function to run (`$command`, `$prompt`, or a user function), the input payload, and an optional snapshot id. The provider:

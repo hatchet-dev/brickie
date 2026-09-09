@@ -41,6 +41,7 @@ type providerConfig struct {
 	injector       bool
 	injectorSecret string
 	injectorImage  string
+	gvisor         string
 }
 
 func (c providerConfig) registerFlags(cmd *cobra.Command) {
@@ -69,6 +70,7 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&providerCfg.injector, "injector", os.Getenv("BRICKIE_INJECTOR") == "true", "run the credential injector sidecar in sandbox pods and seal credentials instead of injecting raw values")
 	cmd.Flags().StringVar(&providerCfg.injectorSecret, "injector-secret", envOr("BRICKIE_INJECTOR_SECRET", ""), "kubernetes Secret holding BRICKIE_INJECTOR_PUBLIC_KEY and BRICKIE_INJECTOR_PRIVATE_KEY")
 	cmd.Flags().StringVar(&providerCfg.injectorImage, "injector-image", envOr("BRICKIE_INJECTOR_IMAGE", ""), "image for the injector sidecar (usually the brickie image)")
+	cmd.Flags().StringVar(&providerCfg.gvisor, "gvisor", envOr("BRICKIE_GVISOR", "auto"), "run sandbox pods under gVisor: auto (use when the gvisor runtime class exists), on, or off (kubernetes driver)")
 }
 
 var providerCfg providerConfig
@@ -93,6 +95,7 @@ func (c providerConfig) buildDriver() (engine.Driver, error) {
 			Image:       c.image,
 			Credentials: creds,
 			Overlay:     c.overlay,
+			GVisor:      c.gvisor,
 			Injector: kubernetes.InjectorOptions{
 				Enabled:    c.injector,
 				SecretName: c.injectorSecret,

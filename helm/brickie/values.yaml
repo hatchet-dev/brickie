@@ -29,6 +29,9 @@ injector:
   image: ""
   catalog: {}
 
+gvisor:
+  mode: auto
+
 csi:
   enabled: false
   dataDir: /var/lib/brickie

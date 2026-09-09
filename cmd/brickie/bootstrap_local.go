@@ -32,6 +32,14 @@ func output(name string, args ...string) (string, error) {
 	return string(out), err
 }
 
+func runStdin(stdin, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 func bootstrapLocalCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "bootstrap-local",
