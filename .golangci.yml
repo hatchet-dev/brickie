@@ -1,0 +1,36 @@
+version: "2"
+linters:
+  default: none
+  enable:
+    - errcheck
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - revive
+    - staticcheck
+    - unconvert
+    - unused
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - printf
+        - shadow
+        - fieldalignment
+    staticcheck:
+      checks:
+        - all
+        - -SA1029
+        - -SA4006
+        - -ST1003
+        - -ST1005
+        - -ST1016
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/hatchet-dev/brickie

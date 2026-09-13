@@ -14,7 +14,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-const gvisorRelease = "20260817.0"
+const gvisorRelease = "20260907.0"
 
 const gvisorInstallScript = `set -e
 CONFIG=/host/etc/containerd/config.toml

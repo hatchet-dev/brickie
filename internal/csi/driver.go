@@ -61,6 +61,7 @@ func Serve(opts Options) error {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			// FIXME(mnafees): do not ignore the error
 			_ = json.NewEncoder(w).Encode(map[string]any{"snapshotId": req.SnapshotID, "layers": layers})
 		})
 		go func() {

@@ -12,8 +12,8 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/huh/spinner"
-	charmlog "github.com/charmbracelet/log"
 	"github.com/charmbracelet/lipgloss"
+	charmlog "github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"

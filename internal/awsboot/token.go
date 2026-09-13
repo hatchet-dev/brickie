@@ -5,9 +5,9 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
-	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"

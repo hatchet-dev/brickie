@@ -4,10 +4,10 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	sandboxv1beta1 "sigs.k8s.io/agent-sandbox/api/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	sandboxv1beta1 "sigs.k8s.io/agent-sandbox/api/v1beta1"
 
 	brickiev1alpha1 "github.com/hatchet-dev/brickie/api/v1alpha1"
 )

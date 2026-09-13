@@ -6,8 +6,8 @@ import "errors"
 
 var errLinuxOnly = errors.New("overlay workspaces are only supported on linux nodes")
 
-func mountOverlay(lower, upper, work, target string) error { return errLinuxOnly }
-func unmountOverlay(target string) error                    { return errLinuxOnly }
-func bindMount(source, target string) error                 { return errLinuxOnly }
-func unmountBind(target string) error                       { return errLinuxOnly }
-func syncFS(mountpoint string) error                        { return errLinuxOnly }
+func mountOverlay(_, _, _, _ string) error { return errLinuxOnly }
+func unmountOverlay(_ string) error        { return errLinuxOnly }
+func bindMount(_ string, _ string) error   { return errLinuxOnly }
+func unmountBind(_ string) error           { return errLinuxOnly }
+func syncFS(_ string) error                { return errLinuxOnly }
