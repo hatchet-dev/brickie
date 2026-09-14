@@ -4,14 +4,13 @@ brickie runs agent sandboxes as Hatchet durable tasks. Read `docs/ARCHITECTURE.m
 
 ## Layout
 
-- `cmd/brickie/`: cobra CLI (`worker`, `controller`, `csi-node`, `bootstrap-local`, `bootstrap-kind`, `bootstrap-aws`)
+- `cmd/brickie/`: cobra CLI (`worker`, `csi-node`, `injector`, `bootstrap-local`, `bootstrap-kind`, `bootstrap-aws`)
 - `internal/awsboot/`: EKS bootstrap via aws-sdk-go-v2 (cluster, nodegroup, IAM, ECR, S3, gVisor installer)
 - `internal/engine/`: turn contract, durable task, snapshot store
 - `internal/driver/`: `local` (Docker Sandboxes via `sbx` CLI) and `kubernetes` (agent-sandbox CRs plus pod exec)
 - `internal/overlay/`: overlayfs layer store, mount/checkpoint/fork, object store offload
 - `internal/csi/`: CSI node plugin on top of `internal/overlay`
-- `internal/controller/`: reconcilers for `brickie.hatchet.run/v1alpha1`
-- `api/v1alpha1/`: CRD types (hand-written deepcopy, no controller-gen yet)
+- `internal/injector/`: credential injector sidecar (sealed secrets, host allowlists, hatchet proxy)
 - `sdks/{typescript,python,go}`: thin clients, `examples/{typescript,python,go}`: runnable sessions
 - `helm/brickie/`: the chart, CRDs under `crds/`, agent-sandbox vendored under `charts/`
 

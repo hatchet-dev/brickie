@@ -53,12 +53,9 @@ Defines the turn contract, the durable task, and the snapshot store interface. T
 - `local`: Docker Sandboxes through the `sbx` CLI. Used for laptop development. Docker publishes no Go client, so the CLI is the interface.
 - `kubernetes`: creates one agent-sandbox `Sandbox` resource per turn using the official v1beta1 types, waits for the pod, executes over the Kubernetes exec API, and deletes the resource when the turn ends.
 
-### Controller (`internal/controller`, `brickie controller`)
+### Provider (`brickie worker`)
 
-The controller process is both a Kubernetes controller and the Hatchet worker. One binary, one deployment:
-
-- As a Hatchet worker it registers the `brickie-sandbox` durable task and executes turns with the kubernetes driver.
-- As a controller it reconciles `SandboxSession` and `WorkspaceSnapshot` resources (group `brickie.hatchet.run/v1alpha1`). Sessions are the long-lived sandbox concept: TTL handling, pod ownership, and snapshot lineage records live here as the implementation fills in.
+The provider is the Hatchet worker: it registers the `brickie-sandbox` durable task and executes turns with the configured driver. There is deliberately no brickie Kubernetes controller or CRD. Desired state lives in Hatchet's run history, not etcd, so retries, timeouts, and replay come from the orchestrator, and the one reconciler in the picture is agent-sandbox's, which turns each `Sandbox` resource into a pod. A reconciler of our own becomes worth writing only if a genuinely declarative concept lands, such as warm pools or TTL'd long-lived sessions, and that decision is deferred until then.
 
 This shape means the cluster only ever dials out to Hatchet. There is no inbound API into the customer account.
 
@@ -103,8 +100,7 @@ The target mechanism is a sidecar proxy, because a token an in-sandbox process c
 
 One Helm chart (`helm/brickie`) installs:
 
-- the controller Deployment (Hatchet worker plus reconcilers), with the Hatchet token required at install time,
-- the brickie CRDs,
+- the provider Deployment (the Hatchet worker), with the Hatchet token required at install time,
 - the agent-sandbox controller and CRDs as a vendored subchart, skippable when the cluster already has them,
 - the CSI node DaemonSet, off by default.
 
@@ -113,7 +109,7 @@ One Helm chart (`helm/brickie`) installs:
 ## Roadmap
 
 1. Overlay workspaces wired into the kubernetes driver via the CSI path, replacing tar-over-exec.
-2. Long-lived sessions reconciled by the controller: mount once, checkpoint between turns through the node HTTP API, suspend by deleting the pod and keeping the chain.
+2. Long-lived sessions: mount once, checkpoint between turns through the node HTTP API, suspend by deleting the pod and keeping the chain. Whether this warrants a CRD and reconciler is decided when it is built.
 3. Credential sidecar as described above.
 4. Sandbox-scoped Hatchet tokens issued through Kubernetes service account OIDC federation.
 5. Image build paths: template snapshots first (fork base, run steps, checkpoint), BuildKit for full images, eventually the whole rootfs as a layer chain.

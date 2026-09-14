@@ -11,7 +11,7 @@ func main() {
 		Use:   "brickie",
 		Short: "Universal sandbox API and session manager. Deploys into your own cloud account.",
 	}
-	root.AddCommand(workerCmd(), controllerCmd(), csiCmd(), injectorCmd(), bootstrapLocalCmd(), bootstrapKindCmd(), bootstrapAWSCmd())
+	root.AddCommand(workerCmd(), csiCmd(), injectorCmd(), bootstrapLocalCmd(), bootstrapKindCmd(), bootstrapAWSCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
