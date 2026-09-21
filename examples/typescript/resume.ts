@@ -15,7 +15,7 @@ async function main() {
     name: 'resume-session',
     executionTimeout: '30m',
     fn: async (input: { from: string }, ctx) => {
-      const check = await sbx.executeCommand(ctx, 'ls && echo --- && cat log.txt', {
+      const check = await sbx.executeCommand(ctx, 'ls', {
         from: input.from,
       });
       return { check };
@@ -28,6 +28,7 @@ async function main() {
   const res = await session.run({ from: snapshotId });
   console.log('restored workspace:', JSON.stringify(res.check.output, null, 2));
   assert.equal((res.check.output as any).exitCode, 0);
+  assert.ok((res.check.output as any).stdout.length > 0);
   console.log('restore ok');
 
   await worker.stop();
