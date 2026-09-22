@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,64 +10,124 @@ import (
 	"sync"
 	"time"
 
-	v0client "github.com/hatchet-dev/hatchet/pkg/client"
 	"github.com/hatchet-dev/hatchet/pkg/client/operatorclient"
-	"github.com/hatchet-dev/hatchet/pkg/client/types"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/hatchet-dev/brickie/internal/injector"
 )
 
 const (
 	actionTypeStartStepRun  = 0
 	actionTypeCancelStepRun = 1
+
+	stepEventStarted   = "STEP_EVENT_TYPE_STARTED"
+	stepEventCompleted = "STEP_EVENT_TYPE_COMPLETED"
+	stepEventFailed    = "STEP_EVENT_TYPE_FAILED"
+	stepEventCancelled = "STEP_EVENT_TYPE_CANCELLED"
 )
 
 type turnAction struct {
-	tenantID      string
-	workflowRunID string
-	jobID         string
-	jobName       string
-	jobRunID      string
-	stepID        string
-	stepRunID     string
-	actionID      string
-	payload       string
-	retryCount    int32
+	jobID      string
+	jobRunID   string
+	stepID     string
+	stepRunID  string
+	actionID   string
+	payload    string
+	retryCount int32
 }
 
-type operatorProvider struct {
-	runner   *turnRunner
-	v0       v0client.Client
-	workerID string
-	mu       sync.Mutex
-	wg       sync.WaitGroup
-	inFlight map[string]context.CancelFunc
+// newArgFor materializes the message type a session method takes, so the
+// internal proto type is named only through inference and filled via
+// protojson.
+func newArgFor[E proto.Message, R any](func(context.Context, E) (R, error)) E {
+	var zero E
+	return zero.ProtoReflect().New().Interface().(E)
+}
+
+func newArgFor2[E proto.Message, R1, R2 any](func(context.Context, E) (R1, R2, error)) E {
+	var zero E
+	return zero.ProtoReflect().New().Interface().(E)
 }
 
 func operatorActionID() string {
 	return strings.ToLower(TaskName + ":" + TaskName)
 }
 
+func dialHatchet(token string) (*grpc.ClientConn, error) {
+	hostPort := os.Getenv("HATCHET_CLIENT_HOST_PORT")
+	if hostPort == "" {
+		var err error
+		hostPort, _, err = injector.HatchetUpstreams(token)
+		if err != nil {
+			return nil, fmt.Errorf("resolve hatchet grpc address: %w", err)
+		}
+	}
+	creds := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	if os.Getenv("HATCHET_CLIENT_TLS_STRATEGY") == "none" {
+		creds = insecure.NewCredentials()
+	}
+	conn, err := grpc.NewClient(hostPort, grpc.WithTransportCredentials(creds))
+	if err != nil {
+		return nil, fmt.Errorf("dial hatchet at %s: %w", hostPort, err)
+	}
+	return conn, nil
+}
+
+type operatorProvider struct {
+	runner   *turnRunner
+	session  operatorclient.Session
+	workerID string
+	mu       sync.Mutex
+	wg       sync.WaitGroup
+	inFlight map[string]context.CancelFunc
+}
+
+func registerWorkflow(ctx context.Context, session operatorclient.Session, runner *turnRunner) ([]string, error) {
+	request := newArgFor2(session.PutWorkflow)
+	spec, err := json.Marshal(map[string]any{
+		"name": TaskName,
+		"tasks": []map[string]any{{
+			"readableId": TaskName,
+			"action":     operatorActionID(),
+			"timeout":    runner.timeout.String(),
+			"retries":    runner.retries,
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := protojson.Unmarshal(spec, request); err != nil {
+		return nil, fmt.Errorf("build workflow request: %w", err)
+	}
+	_, actions, err := session.PutWorkflow(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("register workflow: %w", err)
+	}
+	return actions, nil
+}
+
 func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) error {
 	runner := newTurnRunner(opts)
-	v0, err := v0client.New()
+	token := os.Getenv("HATCHET_CLIENT_TOKEN")
+	if token == "" {
+		return fmt.Errorf("HATCHET_CLIENT_TOKEN is required for operator mode")
+	}
+	conn, err := dialHatchet(token)
 	if err != nil {
 		return err
 	}
-	workflow := &types.Workflow{
-		Name: TaskName,
-		Jobs: map[string]types.WorkflowJob{
-			TaskName: {Steps: []types.WorkflowStep{{
-				Name:     TaskName,
-				ID:       TaskName,
-				ActionID: operatorActionID(),
-				Timeout:  runner.timeout.String(),
-				Retries:  runner.retries,
-			}}},
-		},
+	defer func() {
+		_ = conn.Close()
+	}()
+	operator, err := operatorclient.New(conn, operatorclient.WithToken(token))
+	if err != nil {
+		return fmt.Errorf("build operator client: %w", err)
 	}
-	if err := v0.Admin().PutWorkflow(workflow); err != nil {
-		return fmt.Errorf("register workflow: %w", err)
-	}
-	session, err := v0.Operator().Connect(ctx, &operatorclient.ConnectRequest{
+	session, err := operator.Connect(ctx, &operatorclient.ConnectRequest{
 		Name:       "brickie-provider",
 		SlotConfig: map[string]int32{"default": int32(slots)},
 	})
@@ -76,7 +137,11 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 	defer func() {
 		_ = session.Close()
 	}()
-	session.AddActions(operatorActionID())
+	actions, err := registerWorkflow(ctx, session, runner)
+	if err != nil {
+		return err
+	}
+	session.AddActions(actions...)
 	if err := session.Flush(ctx); err != nil {
 		return fmt.Errorf("flush action set: %w", err)
 	}
@@ -86,7 +151,7 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 	}
 	provider := &operatorProvider{
 		runner:   runner,
-		v0:       v0,
+		session:  session,
 		workerID: session.Registration().WorkerId,
 		inFlight: map[string]context.CancelFunc{},
 	}
@@ -99,16 +164,13 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 				return fmt.Errorf("operator action stream closed")
 			}
 			a := turnAction{
-				tenantID:      action.TenantId,
-				workflowRunID: action.WorkflowRunId,
-				jobID:         action.JobId,
-				jobName:       action.JobName,
-				jobRunID:      action.JobRunId,
-				stepID:        action.TaskId,
-				stepRunID:     action.TaskRunExternalId,
-				actionID:      action.ActionId,
-				payload:       action.ActionPayload,
-				retryCount:    action.RetryCount,
+				jobID:      action.JobId,
+				jobRunID:   action.JobRunId,
+				stepID:     action.TaskId,
+				stepRunID:  action.TaskRunExternalId,
+				actionID:   action.ActionId,
+				payload:    action.ActionPayload,
+				retryCount: action.RetryCount,
 			}
 			switch int32(action.ActionType) {
 			case actionTypeStartStepRun:
@@ -141,25 +203,33 @@ func (p *operatorProvider) execute(ctx context.Context, a turnAction) {
 		cancel()
 	}()
 
-	p.sendEvent(a, v0client.ActionEventTypeStarted, "", nil)
+	p.sendEvent(a, stepEventStarted, "", nil)
 	var payload struct {
 		Input TurnInput `json:"input"`
 	}
 	if err := json.Unmarshal([]byte(a.payload), &payload); err != nil {
 		noRetry := true
-		p.sendEvent(a, v0client.ActionEventTypeFailed, fmt.Sprintf("decode turn input: %v", err), &noRetry)
+		p.sendEvent(a, stepEventFailed, fmt.Sprintf("decode turn input: %v", err), &noRetry)
 		return
 	}
 	log := func(msg string) {
-		retry := a.retryCount
-		_ = p.v0.Event().PutLog(context.Background(), a.stepRunID, msg, nil, &retry)
+		fmt.Fprintf(os.Stderr, "brickie: [%s] %s\n", a.stepRunID, msg)
 	}
 	result, err := p.runner.run(tctx, a.stepRunID, payload.Input, log)
 	if err != nil {
-		p.sendEvent(a, v0client.ActionEventTypeFailed, err.Error(), nil)
+		if tctx.Err() != nil && ctx.Err() == nil {
+			p.sendEvent(a, stepEventCancelled, "cancelled", nil)
+			return
+		}
+		p.sendEvent(a, stepEventFailed, err.Error(), nil)
 		return
 	}
-	p.sendEvent(a, v0client.ActionEventTypeCompleted, result, nil)
+	out, err := json.Marshal(result)
+	if err != nil {
+		p.sendEvent(a, stepEventFailed, fmt.Sprintf("encode turn result: %v", err), nil)
+		return
+	}
+	p.sendEvent(a, stepEventCompleted, string(out), nil)
 }
 
 func (p *operatorProvider) cancel(stepRunID string) {
@@ -174,29 +244,35 @@ func (p *operatorProvider) cancel(stepRunID string) {
 	}
 }
 
-func (p *operatorProvider) sendEvent(a turnAction, eventType v0client.ActionEventType, payload any, shouldNotRetry *bool) {
-	ts := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	_, err := p.v0.Dispatcher().SendStepActionEvent(ctx, &v0client.ActionEvent{
-		Action: &v0client.Action{
-			WorkerId:      p.workerID,
-			TenantId:      a.tenantID,
-			WorkflowRunId: a.workflowRunID,
-			JobId:         a.jobID,
-			JobName:       a.jobName,
-			JobRunId:      a.jobRunID,
-			StepId:        a.stepID,
-			StepRunId:     a.stepRunID,
-			ActionId:      a.actionID,
-			RetryCount:    a.retryCount,
-		},
-		EventTimestamp: &ts,
-		EventType:      eventType,
-		EventPayload:   payload,
-		ShouldNotRetry: shouldNotRetry,
-	})
+func (p *operatorProvider) sendEvent(a turnAction, eventType, payload string, shouldNotRetry *bool) {
+	fields := map[string]any{
+		"workerId":          p.workerID,
+		"jobId":             a.jobID,
+		"jobRunId":          a.jobRunID,
+		"taskId":            a.stepID,
+		"taskRunExternalId": a.stepRunID,
+		"actionId":          a.actionID,
+		"eventTimestamp":    time.Now().UTC().Format(time.RFC3339Nano),
+		"eventType":         eventType,
+		"eventPayload":      payload,
+		"retryCount":        a.retryCount,
+	}
+	if shouldNotRetry != nil {
+		fields["shouldNotRetry"] = *shouldNotRetry
+	}
+	raw, err := json.Marshal(fields)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "brickie: build %s for %s failed: %v\n", eventType, a.stepRunID, err)
+		return
+	}
+	event := newArgFor(p.session.SendStepActionEvent)
+	if err := protojson.Unmarshal(raw, event); err != nil {
+		fmt.Fprintf(os.Stderr, "brickie: build %s for %s failed: %v\n", eventType, a.stepRunID, err)
+		return
+	}
+	ctx, cancelSend := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelSend()
+	if _, err := p.session.SendStepActionEvent(ctx, event); err != nil {
 		fmt.Fprintf(os.Stderr, "brickie: send %s for %s failed: %v\n", eventType, a.stepRunID, err)
 	}
 }

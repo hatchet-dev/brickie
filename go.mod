@@ -1,6 +1,6 @@
 module github.com/hatchet-dev/brickie
 
-go 1.26.0
+go 1.27
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.46.0
@@ -17,7 +17,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/log v1.0.0
 	github.com/container-storage-interface/spec v1.11.0
-	github.com/hatchet-dev/hatchet v0.108.1-0.20260921195300-099c41a49872
+	github.com/hatchet-dev/hatchet v0.109.0
 	github.com/spf13/cobra v1.10.2
 	gocloud.dev v0.46.0
 	golang.org/x/crypto v0.55.0

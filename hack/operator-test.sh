@@ -31,7 +31,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> building brickie"
-GOPROXY=direct GOSUMDB=off go build -o "$WORKDIR/brickie" ./cmd/brickie
+go build -o "$WORKDIR/brickie" ./cmd/brickie
 
 echo "==> starting provider in operator mode (local driver)"
 BRICKIE_OTEL=false "$WORKDIR/brickie" worker --driver local --operator --slots 5 \
