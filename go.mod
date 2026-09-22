@@ -17,7 +17,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/log v1.0.0
 	github.com/container-storage-interface/spec v1.11.0
-	github.com/hatchet-dev/hatchet v0.109.0
+	github.com/hatchet-dev/hatchet v0.109.2
 	github.com/spf13/cobra v1.10.2
 	gocloud.dev v0.46.0
 	golang.org/x/crypto v0.55.0
@@ -272,5 +272,3 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
-
-replace github.com/hatchet-dev/hatchet => ../hatchet
