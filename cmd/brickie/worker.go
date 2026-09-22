@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -42,7 +43,6 @@ type providerConfig struct {
 	injectorSecret string
 	injectorImage  string
 	gvisor         string
-	operator       bool
 }
 
 func (c providerConfig) registerFlags(cmd *cobra.Command) {
@@ -72,7 +72,6 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&providerCfg.injectorSecret, "injector-secret", envOr("BRICKIE_INJECTOR_SECRET", ""), "kubernetes Secret holding BRICKIE_INJECTOR_PUBLIC_KEY and BRICKIE_INJECTOR_PRIVATE_KEY")
 	cmd.Flags().StringVar(&providerCfg.injectorImage, "injector-image", envOr("BRICKIE_INJECTOR_IMAGE", ""), "image for the injector sidecar (usually the brickie image)")
 	cmd.Flags().StringVar(&providerCfg.gvisor, "gvisor", envOr("BRICKIE_GVISOR", "auto"), "run sandbox pods under gVisor: auto (use when the gvisor runtime class exists), on, or off (kubernetes driver)")
-	cmd.Flags().BoolVar(&providerCfg.operator, "operator", os.Getenv("BRICKIE_OPERATOR") == "true", "serve turns as a hatchet grpc operator instead of a worker (requires SERVER_GRPC_OPERATORS_ENABLED for the tenant)")
 }
 
 var providerCfg providerConfig
@@ -124,13 +123,15 @@ func runProvider(ctx context.Context, c providerConfig) error {
 		store = engine.ObjectSnapshotStore{Cache: engine.FSSnapshotStore{Dir: c.snapshotDir}, Remote: remote}
 		fmt.Fprintf(os.Stderr, "brickie: turn snapshots offloaded to object store\n")
 	}
-	if c.operator {
-		return engine.RunOperatorProvider(ctx, engine.ProviderOpts{
-			Driver:      driver,
-			Store:       store,
-			TurnTimeout: c.turnTimeout,
-		}, c.slots)
+	err = engine.RunOperatorProvider(ctx, engine.ProviderOpts{
+		Driver:      driver,
+		Store:       store,
+		TurnTimeout: c.turnTimeout,
+	}, c.slots)
+	if !errors.Is(err, engine.ErrOperatorUnavailable) {
+		return err
 	}
+	fmt.Fprintf(os.Stderr, "brickie: %v; falling back to worker mode\n", err)
 	client, err := hatchet.NewClient()
 	if err != nil {
 		return err

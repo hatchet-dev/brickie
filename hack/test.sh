@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# End-to-end test of the gRPC operator provider against a running Hatchet
-# instance. The tenant must have SERVER_GRPC_OPERATORS_ENABLED=true.
-# Usage: HATCHET_CLIENT_TOKEN=... hack/operator-test.sh [--full]
+# End-to-end test of the brickie provider against a running Hatchet instance.
+# The tenant must have SERVER_GRPC_OPERATORS_ENABLED=true.
+# Usage: HATCHET_CLIENT_TOKEN=... hack/test.sh [--full]
 # (--full also runs the Claude Agent SDK harness example; needs sbx claude auth)
 # Against a local TLS-less engine, also set HATCHET_CLIENT_TLS_STRATEGY=none.
 
@@ -34,7 +34,7 @@ echo "==> building brickie"
 go build -o "$WORKDIR/brickie" ./cmd/brickie
 
 echo "==> starting provider in operator mode (local driver)"
-BRICKIE_OTEL=false "$WORKDIR/brickie" worker --driver local --operator --slots 5 \
+BRICKIE_OTEL=false "$WORKDIR/brickie" worker --driver local --slots 5 \
   > "$WORKDIR/provider.log" 2>&1 &
 PROVIDER_PID=$!
 
@@ -76,4 +76,4 @@ if [ "$FULL" = "--full" ]; then
 fi
 
 echo
-echo "PASS: unchanged SDK examples served by the gRPC operator ($ROOT)"
+echo "PASS: unchanged SDK examples served by the provider ($ROOT)"
