@@ -321,7 +321,7 @@ func (d *Driver) waitReady(ctx context.Context, pod string) error {
 	var last *corev1.Pod
 	for time.Now().Before(deadline) {
 		p, err := d.clientset.CoreV1().Pods(d.opts.Namespace).Get(ctx, pod, metav1.GetOptions{})
-		if err == nil {
+		if err == nil && p.DeletionTimestamp == nil {
 			last = p
 			if p.Status.Phase == corev1.PodRunning {
 				ready := len(p.Status.ContainerStatuses) > 0

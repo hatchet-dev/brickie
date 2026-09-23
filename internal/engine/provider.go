@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
@@ -92,7 +93,12 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 func NewProviderTask(client *hatchet.Client, opts ProviderOpts) *hatchet.StandaloneTask {
 	runner := newTurnRunner(opts)
 	return client.NewStandaloneDurableTask(TaskName, func(ctx hatchet.DurableContext, input TurnInput) (TurnResult, error) {
-		return runner.run(ctx, ctx.WorkflowRunId(), input, ctx.Log)
+		runID := ctx.WorkflowRunId()
+		log := func(msg string) {
+			fmt.Fprintf(os.Stderr, "brickie: [%s] %s\n", runID, msg)
+			ctx.Log(msg)
+		}
+		return runner.run(ctx, runID, input, log)
 	}, hatchet.WithExecutionTimeout(runner.timeout), hatchet.WithRetries(runner.retries))
 }
 

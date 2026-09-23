@@ -9,7 +9,8 @@ async function main() {
 
   const session = hatchet.durableTask({
     name: 'k8s-session',
-    executionTimeout: '30m',
+    executionTimeout: '10m',
+    schedulingTimeout: '1m',
     fn: async (_input: {}, ctx) => {
       const t1 = await sbx.executeCommand(ctx, 'echo one > log.txt && cat /etc/alpine-release');
       const t2 = await sbx.executeCommand(ctx, 'echo two >> log.txt && wc -l < log.txt', {

@@ -28,6 +28,8 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            - name: BRICKIE_DRIVER
+              value: kubernetes
             - name: BRICKIE_SANDBOX_NAMESPACE
               value: {{ include "brickie.sandboxNamespace" . | quote }}
             - name: BRICKIE_SANDBOX_IMAGE
