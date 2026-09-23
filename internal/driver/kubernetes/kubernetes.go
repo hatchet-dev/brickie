@@ -551,7 +551,7 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 			return engine.TurnResponse{}, err
 		}
 		if res.ExitCode != 0 {
-			return engine.TurnResponse{}, fmt.Errorf("claude failed (exit %d): %s", res.ExitCode, res.Stderr)
+			return engine.TurnResponse{}, fmt.Errorf("claude failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr+string(res.Stdout)))
 		}
 		ls, err := d.mustExec(ctx, req.SandboxName, []string{"ls", "-1", engine.Workspace}, nil)
 		if err != nil {

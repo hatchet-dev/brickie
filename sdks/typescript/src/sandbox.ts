@@ -98,6 +98,26 @@ function ensureBackendProvider(
   })();
 }
 
+export type Sandbox = ReturnType<typeof sandbox>;
+
+declare module '@hatchet-dev/typescript-sdk/v1' {
+  interface HatchetClient {
+    sandbox(opts?: SandboxOpts): Sandbox;
+  }
+}
+
+HatchetClient.prototype.sandbox = function (this: HatchetClient, opts: SandboxOpts = {}) {
+  return sandbox(this, opts);
+};
+
+const turnSeq = new WeakMap<object, number>();
+
+function nextKey(ctx: object) {
+  const n = turnSeq.get(ctx) ?? 0;
+  turnSeq.set(ctx, n + 1);
+  return `sbx-${n}`;
+}
+
 export function sandbox(hatchet: HatchetClient, opts: SandboxOpts = {}) {
   void setupTelemetry();
   if (opts.backend) {
@@ -105,13 +125,6 @@ export function sandbox(hatchet: HatchetClient, opts: SandboxOpts = {}) {
   } else {
     ensureLocalProvider(hatchet);
   }
-
-  const seq = new WeakMap<object, number>();
-  const nextKey = (ctx: object) => {
-    const n = seq.get(ctx) ?? 0;
-    seq.set(ctx, n + 1);
-    return `sbx-${n}`;
-  };
 
   const turn = (fn: string, input: JsonObject, from?: string, fnSource?: string): SandboxTurnInput => ({
     ...(opts.image ? { image: opts.image } : {}),
