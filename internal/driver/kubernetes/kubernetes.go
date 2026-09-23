@@ -18,6 +18,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -111,7 +112,36 @@ func New(opts Options) (*Driver, error) {
 	if err := d.detectGVisor(); err != nil {
 		return nil, err
 	}
+	if err := d.storeHatchetTokenForSidecar(); err != nil {
+		return nil, err
+	}
 	return d, nil
+}
+
+// The sidecar reads the real Hatchet token from the injector Secret via its
+// envFrom, so the token never appears inline in a pod spec.
+func (d *Driver) storeHatchetTokenForSidecar() error {
+	if !d.opts.Injector.Enabled {
+		return nil
+	}
+	token := os.Getenv("HATCHET_CLIENT_TOKEN")
+	if token == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	secret, err := d.clientset.CoreV1().Secrets(d.opts.Namespace).Get(ctx, d.opts.Injector.SecretName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("read injector secret %s: %w", d.opts.Injector.SecretName, err)
+	}
+	if string(secret.Data["HATCHET_CLIENT_TOKEN"]) == token {
+		return nil
+	}
+	patch := []byte(fmt.Sprintf(`{"stringData":{"HATCHET_CLIENT_TOKEN":%q}}`, token))
+	if _, err := d.clientset.CoreV1().Secrets(d.opts.Namespace).Patch(ctx, d.opts.Injector.SecretName, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("store hatchet token in injector secret %s: %w", d.opts.Injector.SecretName, err)
+	}
+	return nil
 }
 
 func (d *Driver) detectGVisor() error {
@@ -215,7 +245,6 @@ func hatchetPlaceholderEnv() []corev1.EnvVar {
 	}
 	return []corev1.EnvVar{
 		{Name: "HATCHET_CLIENT_TOKEN", Value: placeholder},
-		{Name: "HATCHET_CLIENT_HOST_PORT", Value: listen},
 		{Name: "HATCHET_CLIENT_TLS_STRATEGY", Value: "none"},
 	}
 }
@@ -423,15 +452,13 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 			WorkingDir: engine.Workspace,
 		}},
 	}
+	automount := false
+	podSpec.AutomountServiceAccountToken = &automount
 	if d.opts.Injector.Enabled {
 		sidecarRestart := corev1.ContainerRestartPolicyAlways
-		automount := false
-		podSpec.AutomountServiceAccountToken = &automount
 		sidecarEnv := []corev1.EnvVar{}
-		for _, name := range []string{"HATCHET_CLIENT_TOKEN", "HATCHET_CLIENT_TLS_STRATEGY"} {
-			if v, ok := os.LookupEnv(name); ok {
-				sidecarEnv = append(sidecarEnv, corev1.EnvVar{Name: name, Value: v})
-			}
+		if v, ok := os.LookupEnv("HATCHET_CLIENT_TLS_STRATEGY"); ok {
+			sidecarEnv = append(sidecarEnv, corev1.EnvVar{Name: "HATCHET_CLIENT_TLS_STRATEGY", Value: v})
 		}
 		podSpec.InitContainers = []corev1.Container{{
 			Name:          "injector",

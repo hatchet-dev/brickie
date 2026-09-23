@@ -9,6 +9,12 @@ rules:
   - apiGroups: ["agents.x-k8s.io"]
     resources: ["sandboxes"]
     verbs: ["create", "delete", "get", "list", "watch", "update", "patch"]
+  {{- if .Values.injector.enabled }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ .Values.injector.secret }}"]
+    verbs: ["get", "update", "patch"]
+  {{- end }}
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]

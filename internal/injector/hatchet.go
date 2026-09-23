@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 )
 
 func jwtClaims(token string) (map[string]any, error) {
@@ -41,19 +42,23 @@ func HatchetUpstreams(token string) (grpcAddr, serverURL string, err error) {
 	return grpcAddr, serverURL, nil
 }
 
-// MintHatchetPlaceholder builds a JWT with the real token's claims but with
-// endpoints rewritten to the sidecar and a random signature. Hatchet SDKs
-// parse it for configuration; the engine rejects it; leaking it leaks
-// nothing. The claims of the real token are not confidential, only its
-// signature is.
+// MintHatchetPlaceholder builds a JWT carrying only the claims in-sandbox
+// SDKs consume: the tenant (sub), validity timestamps, and endpoints pointing
+// at the sidecar. Everything else from the real token (issuer, audience,
+// token id) is dropped, and the signature is random, so leaking it leaks
+// nothing.
 func MintHatchetPlaceholder(realToken, listenHostPort string) (string, error) {
 	claims, err := jwtClaims(realToken)
 	if err != nil {
 		return "", err
 	}
-	claims["grpc_broadcast_address"] = listenHostPort
-	claims["server_url"] = "http://" + listenHostPort
-	payload, err := json.Marshal(claims)
+	payload, err := json.Marshal(map[string]any{
+		"sub":                    claims["sub"],
+		"exp":                    claims["exp"],
+		"iat":                    time.Now().Unix(),
+		"grpc_broadcast_address": listenHostPort,
+		"server_url":             "http://" + listenHostPort,
+	})
 	if err != nil {
 		return "", err
 	}
