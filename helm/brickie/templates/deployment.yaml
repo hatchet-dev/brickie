@@ -36,6 +36,12 @@ spec:
               value: {{ .Values.sandbox.image | quote }}
             - name: BRICKIE_TURN_TIMEOUT
               value: {{ .Values.sandbox.turnTimeout | quote }}
+            {{- if .Values.sandbox.warmImages }}
+            - name: BRICKIE_WARM_IMAGES
+              value: {{ join "," .Values.sandbox.warmImages | quote }}
+            {{- end }}
+            - name: BRICKIE_WARM_REPLICAS
+              value: {{ .Values.sandbox.warmReplicas | quote }}
             - name: BRICKIE_CREDENTIALS
               value: {{ include "brickie.credentialNames" . | quote }}
             {{- if .Values.objectStore }}

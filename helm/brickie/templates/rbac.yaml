@@ -9,6 +9,9 @@ rules:
   - apiGroups: ["agents.x-k8s.io"]
     resources: ["sandboxes"]
     verbs: ["create", "delete", "get", "list", "watch", "update", "patch"]
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxclaims", "sandboxtemplates", "sandboxwarmpools"]
+    verbs: ["create", "delete", "get", "list", "watch", "update", "patch"]
   {{- if .Values.injector.enabled }}
   - apiGroups: [""]
     resources: ["secrets"]

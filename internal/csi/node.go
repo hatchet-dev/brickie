@@ -46,6 +46,9 @@ func (n nodeServer) NodePublishVolume(ctx context.Context, req *csipb.NodePublis
 	}
 	sandboxID := req.GetVolumeContext()[AttrSandboxID]
 	if sandboxID == "" {
+		sandboxID = req.GetVolumeContext()["csi.storage.k8s.io/pod.name"]
+	}
+	if sandboxID == "" {
 		sandboxID = req.VolumeId
 	}
 	snapshotID := req.GetVolumeContext()[AttrSnapshotID]

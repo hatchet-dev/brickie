@@ -43,6 +43,8 @@ type providerConfig struct {
 	injectorSecret string
 	injectorImage  string
 	gvisor         string
+	warmImages     string
+	warmReplicas   int
 }
 
 func (c providerConfig) registerFlags(cmd *cobra.Command) {
@@ -72,6 +74,14 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&providerCfg.injectorSecret, "injector-secret", envOr("BRICKIE_INJECTOR_SECRET", ""), "kubernetes Secret holding BRICKIE_INJECTOR_PUBLIC_KEY and BRICKIE_INJECTOR_PRIVATE_KEY")
 	cmd.Flags().StringVar(&providerCfg.injectorImage, "injector-image", envOr("BRICKIE_INJECTOR_IMAGE", ""), "image for the injector sidecar (usually the brickie image)")
 	cmd.Flags().StringVar(&providerCfg.gvisor, "gvisor", envOr("BRICKIE_GVISOR", "auto"), "run sandbox pods under gVisor: auto (use when the gvisor runtime class exists), on, or off (kubernetes driver)")
+	cmd.Flags().StringVar(&providerCfg.warmImages, "warm-images", envOr("BRICKIE_WARM_IMAGES", ""), "comma-separated images to pre-create warm pools for at startup (kubernetes driver; other images get pools on first use)")
+	defaultWarmReplicas := 2
+	if v := os.Getenv("BRICKIE_WARM_REPLICAS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			defaultWarmReplicas = n
+		}
+	}
+	cmd.Flags().IntVar(&providerCfg.warmReplicas, "warm-replicas", defaultWarmReplicas, "warm sandbox pods kept ready per image pool (kubernetes driver)")
 }
 
 var providerCfg providerConfig
@@ -90,13 +100,21 @@ func (c providerConfig) buildDriver() (engine.Driver, error) {
 		if err := injector.ExtendCatalog(os.Getenv("BRICKIE_INJECTOR_CATALOG")); err != nil {
 			return nil, err
 		}
+		warmImages := []string{}
+		for name := range strings.SplitSeq(c.warmImages, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				warmImages = append(warmImages, name)
+			}
+		}
 		return kubernetes.New(kubernetes.Options{
-			Context:     c.kubeContext,
-			Namespace:   c.namespace,
-			Image:       c.image,
-			Credentials: creds,
-			Overlay:     c.overlay,
-			GVisor:      c.gvisor,
+			Context:      c.kubeContext,
+			Namespace:    c.namespace,
+			Image:        c.image,
+			Credentials:  creds,
+			Overlay:      c.overlay,
+			GVisor:       c.gvisor,
+			WarmImages:   warmImages,
+			WarmReplicas: c.warmReplicas,
 			Injector: kubernetes.InjectorOptions{
 				Enabled:    c.injector,
 				SecretName: c.injectorSecret,

@@ -46,23 +46,41 @@ func Serve(opts Options) error {
 	csipb.RegisterNodeServer(server, nodeServer{nodeID: opts.NodeID, dataDir: opts.DataDir, manager: manager})
 
 	if opts.HTTPAddr != "" {
-		mux := http.NewServeMux()
-		mux.HandleFunc("POST /v1/checkpoint", func(w http.ResponseWriter, r *http.Request) {
+		decode := func(w http.ResponseWriter, r *http.Request) (sandboxID, snapshotID string, ok bool) {
 			var req struct {
 				SandboxID  string `json:"sandboxId"`
 				SnapshotID string `json:"snapshotId"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SandboxID == "" || req.SnapshotID == "" {
 				http.Error(w, "sandboxId and snapshotId are required", http.StatusBadRequest)
+				return "", "", false
+			}
+			return req.SandboxID, req.SnapshotID, true
+		}
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /v1/checkpoint", func(w http.ResponseWriter, r *http.Request) {
+			sandboxID, snapshotID, ok := decode(w, r)
+			if !ok {
 				return
 			}
-			layers, err := manager.Checkpoint(req.SandboxID, req.SnapshotID)
+			layers, err := manager.Checkpoint(sandboxID, snapshotID)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			// FIXME(mnafees): do not ignore the error
-			_ = json.NewEncoder(w).Encode(map[string]any{"snapshotId": req.SnapshotID, "layers": layers})
+			_ = json.NewEncoder(w).Encode(map[string]any{"snapshotId": snapshotID, "layers": layers})
+		})
+		mux.HandleFunc("POST /v1/restore", func(w http.ResponseWriter, r *http.Request) {
+			sandboxID, snapshotID, ok := decode(w, r)
+			if !ok {
+				return
+			}
+			if err := manager.RestoreInto(sandboxID, snapshotID); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"snapshotId": snapshotID})
 		})
 		go func() {
 			fmt.Fprintf(os.Stderr, "brickie: csi node http api on %s\n", opts.HTTPAddr)

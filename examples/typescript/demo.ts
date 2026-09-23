@@ -1,71 +1,72 @@
+import * as readline from 'node:readline/promises';
 import { initClient } from './client.js';
 import '@hatchet/sandbox';
 
 const CLAUDE_IMAGE = process.env.DEMO_CLAUDE_IMAGE ?? '643285090708.dkr.ecr.us-east-2.amazonaws.com/brickie:claude-code-0.1.0';
 
-function section(title: string) {
-  console.log(`\n=== ${title} ===`);
-}
-
 async function main() {
+  process.env.HATCHET_CLIENT_LOG_LEVEL = process.env.HATCHET_CLIENT_LOG_LEVEL ?? 'ERROR';
   const hatchet = await initClient();
 
-  const session = hatchet.durableTask({
-    name: 'demo-session',
+  const turn = hatchet.durableTask({
+    name: 'agent-turn',
     executionTimeout: '5m',
-    scheduleTimeout: '1m',
-    fn: async (_input: {}, ctx) => {
+    fn: async (input: { message: string; from?: string }, ctx) => {
       const shell = hatchet.sandbox();
       const claude = hatchet.sandbox({ image: CLAUDE_IMAGE });
-
-      const setup = await shell.executeCommand(
-        ctx,
-        'echo "brickie: durable sandbox turns on your own cluster" > notes.txt && uname -sr'
-      );
-      const listed = await shell.executeCommand(ctx, 'cat notes.txt && ls', { from: setup.snapshotId });
-
-      const poem = await claude.executePrompt(
-        ctx,
-        'Read notes.txt and write haiku.md containing a haiku inspired by it. Reply with only the haiku.',
-        { from: listed.snapshotId }
-      );
-
-      const [branchA, branchB] = await shell.executeAll(ctx, [
-        { command: 'echo "branch A was here" >> haiku.md && cat haiku.md', from: poem.snapshotId },
-        { command: 'echo "branch B was here" >> haiku.md && cat haiku.md', from: poem.snapshotId },
-      ]);
-
-      const restored = await shell.executeCommand(ctx, 'ls && cat notes.txt', { from: setup.snapshotId });
-
-      return { setup, listed, poem, branchA, branchB, restored };
+      const opts = input.from ? { from: input.from } : {};
+      if (input.message.startsWith('!')) {
+        return shell.executeCommand(ctx, input.message.slice(1), opts);
+      }
+      return claude.executePrompt(ctx, input.message, opts);
     },
   });
 
-  const worker = await hatchet.worker('demo-worker', { workflows: [session] });
+  const worker = await hatchet.worker('demo-worker', { workflows: [turn] });
   void worker.start();
 
-  console.log('running demo session on the cluster...');
-  const r = await session.run({});
+  console.log('brickie session shell — every message runs one durable turn in a fresh sandbox on your cluster');
+  console.log('  <text>         agent turn (Claude in its own sandbox image)');
+  console.log('  !<command>     shell turn (alpine sandbox)');
+  console.log('  /restore <id>  continue from any snapshot in a new sandbox');
+  console.log('  /exit          quit\n');
 
-  section('1. shell sandbox (alpine:3): write state, chain a turn');
-  console.log('turn 1 output:', (r.setup.output as any).stdout);
-  console.log('turn 1 snapshot:', r.setup.snapshotId);
-  console.log('turn 2 sees turn 1 state:', (r.listed.output as any).stdout);
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  let snapshot: string | undefined;
+  const clock = () => new Date().toLocaleTimeString('en-US', { hour12: false });
+  const ask = async () => {
+    const prompt = () => `[${clock()}] you> `;
+    const tick = setInterval(() => {
+      rl.setPrompt(prompt());
+      rl.prompt(true);
+    }, 1000);
+    try {
+      return await rl.question(prompt());
+    } finally {
+      clearInterval(tick);
+    }
+  };
 
-  section('2. claude sandbox (different image, same workspace)');
-  console.log((r.poem.output as any).reply);
-  console.log('files:', (r.poem.output as any).files);
+  for (;;) {
+    const line = (await ask()).trim();
+    if (!line) continue;
+    if (line === '/exit') break;
+    if (line.startsWith('/restore ')) {
+      snapshot = line.split(/\s+/)[1];
+      console.log(`next turn restores snapshot ${snapshot} into a fresh sandbox\n`);
+      continue;
+    }
+    const started = Date.now();
+    const result = await turn.run({ message: line, ...(snapshot ? { from: snapshot } : {}) });
+    const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+    const out = result.output as any;
+    console.log(out.reply ?? out.stdout ?? '');
+    if (out.stderr) console.log(out.stderr);
+    snapshot = result.snapshotId;
+    console.log(`(snapshot ${snapshot} · ${elapsed}s)\n`);
+  }
 
-  section('3. fork: two branches from one snapshot');
-  console.log('branch A:', (r.branchA.output as any).stdout);
-  console.log('branch B:', (r.branchB.output as any).stdout);
-  console.log('snapshots:', r.branchA.snapshotId, '|', r.branchB.snapshotId);
-
-  section('4. restore: time-travel back to turn 1');
-  console.log((r.restored.output as any).stdout);
-
-  console.log('\nevery turn above is a durable Hatchet task: retries, logs, and traces are in the dashboard.');
-
+  rl.close();
   await worker.stop();
   await hatchet.stopEmbedded?.();
   process.exit(0);

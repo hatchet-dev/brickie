@@ -12,7 +12,8 @@
     "e2b": "tsx e2b.ts",
     "e2b-harness": "tsx e2b-harness.ts",
     "managed-agent": "tsx managed-agent.ts",
-    "demo": "tsx demo.ts"
+    "demo": "tsx demo.ts",
+    "demo-full": "tsx demo-full.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

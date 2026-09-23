@@ -14,6 +14,10 @@ func mountOverlay(lower, upper, work, target string) error {
 	return unix.Mount("overlay", target, "overlay", 0, opts)
 }
 
+func mountOverlayRO(lower, target string) error {
+	return unix.Mount("overlay", target, "overlay", unix.MS_RDONLY, "lowerdir="+lower)
+}
+
 func unmountOverlay(target string) error {
 	return unmountIdempotent(target)
 }

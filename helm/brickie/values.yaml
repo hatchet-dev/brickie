@@ -19,6 +19,8 @@ sandbox:
   credentials: {}
   existingCredentialsSecret: ""
   credentialNames: []
+  warmImages: []
+  warmReplicas: 2
 
 objectStore: ""
 objectStoreSecret: ""
@@ -44,4 +46,6 @@ tolerations: []
 agent-sandbox:
   enabled: true
   image:
-    tag: v0.5.6
+    tag: v1.0.3
+  controller:
+    extensions: true

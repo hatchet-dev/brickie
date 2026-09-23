@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -144,6 +145,49 @@ func (m *Manager) Checkpoint(sandboxID, snapshotID string) ([]string, error) {
 		return nil, err
 	}
 	return chain, nil
+}
+
+// RestoreInto materializes a snapshot's merged view into a live, blank
+// workspace by copying through the mounted overlay at merged, which keeps the
+// pod's view coherent. The snapshot chain is assembled read-only (with the
+// empty base appended so overlay always has two lowers) and the kernel
+// resolves whiteouts during the copy. The workspace chain stays empty, so the
+// next checkpoint squashes the restored content into a single base layer.
+func (m *Manager) RestoreInto(sandboxID, snapshotID string) error {
+	chain, err := m.Store.ReadManifest(snapshotID)
+	if err != nil {
+		return err
+	}
+	_, _, merged := m.paths(sandboxID)
+	if _, err := os.Stat(m.chainPath(sandboxID)); err != nil {
+		return fmt.Errorf("sandbox %s is not mounted: %w", sandboxID, err)
+	}
+	if len(chain) == 0 {
+		return nil
+	}
+	lower, err := m.lowerdirOption(chain)
+	if err != nil {
+		return err
+	}
+	empty, err := m.emptyBaseLayer()
+	if err != nil {
+		return err
+	}
+	src := filepath.Join(m.sandboxDir(sandboxID), "restore")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		return err
+	}
+	if err := mountOverlayRO(lower+":"+empty, src); err != nil {
+		return fmt.Errorf("mount snapshot %s read-only: %w", snapshotID, err)
+	}
+	defer func() {
+		_ = unmountOverlay(src)
+		_ = os.RemoveAll(src)
+	}()
+	if out, err := exec.Command("cp", "-a", src+"/.", merged+"/").CombinedOutput(); err != nil {
+		return fmt.Errorf("restore %s into %s: %v: %s", snapshotID, sandboxID, err, out)
+	}
+	return syncFS(merged)
 }
 
 func (m *Manager) Unmount(sandboxID string) error {
