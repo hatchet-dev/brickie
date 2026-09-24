@@ -1,6 +1,6 @@
 # brickie
 
-Agent sandboxes as durable tasks. Every agent turn runs as a Hatchet durable task inside its own Docker Sandboxes micro-VM. Each turn ends with an immutable workspace snapshot. Later turns can resume or fork any snapshot, files and conversation included.
+Agent sandboxes as Hatchet durable tasks. Every agent turn runs as a Hatchet durable task inside its own Docker Sandboxes micro-VM. Each turn ends with an immutable workspace snapshot. Later turns can resume or fork any snapshot, files and conversation included.
 
 ## Requirements
 
