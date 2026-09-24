@@ -51,10 +51,8 @@ func (s *Store) EnsureDirs() error {
 	return nil
 }
 
-// PutUpper freezes an upperdir as a content-addressed layer: tar it (whiteout
-// devices included), hash the tar, store the blob, and extract a read-only
-// copy under layers/. TODO: upload the blob to S3 and switch the tar step to
-// containerd/archive Diff so layers are byte-for-byte OCI layers.
+// PutUpper freezes an upperdir as a content-addressed layer blob; Materialize
+// extracts it on first use.
 func (s *Store) PutUpper(upperDir string) (string, error) {
 	tmp, err := os.CreateTemp(filepath.Join(s.Root, "blobs"), "layer-*.tar.gz")
 	if err != nil {
@@ -93,9 +91,6 @@ func (s *Store) PutUpper(upperDir string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("offload layer %s: %w", digest, err)
 		}
-	}
-	if err := s.Materialize(digest); err != nil {
-		return "", err
 	}
 	return digest, nil
 }

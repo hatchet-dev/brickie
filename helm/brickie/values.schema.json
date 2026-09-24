@@ -81,6 +81,19 @@
           "type": "string",
           "pattern": "^[0-9]+(ns|us|ms|s|m|h)$"
         },
+        "idleTTL": {
+          "type": "string",
+          "pattern": "^[0-9]+(ns|us|ms|s|m|h)$"
+        },
+        "runtime": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "gvisor",
+            "kata",
+            "none"
+          ]
+        },
         "credentials": {
           "type": "object",
           "additionalProperties": {
@@ -154,20 +167,6 @@
               "hosts"
             ]
           }
-        }
-      }
-    },
-    "gvisor": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "mode": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "on",
-            "off"
-          ]
         }
       }
     },

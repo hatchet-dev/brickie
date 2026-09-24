@@ -392,3 +392,6 @@ pyrightconfig.json
 .terraform/
 .terraform.lock.hcl
 *.tfstate*
+
+# brickie
+bin/

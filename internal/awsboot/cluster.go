@@ -49,6 +49,12 @@ func IsGraviton(instanceType string) bool {
 	return gravitonFamily.MatchString(family)
 }
 
+// IsMetal reports whether an instance type exposes KVM, which Kata needs.
+func IsMetal(instanceType string) bool {
+	_, size, _ := strings.Cut(instanceType, ".")
+	return strings.HasPrefix(size, "metal")
+}
+
 func (b *Bootstrapper) CreateCluster(ctx context.Context, name, roleARN string, subnetIDs []string) error {
 	input := &eks.CreateClusterInput{
 		Name:    aws.String(name),
@@ -151,28 +157,30 @@ func (b *Bootstrapper) ListClusters(ctx context.Context) ([]string, error) {
 	}
 }
 
-func (b *Bootstrapper) NodegroupRoles(ctx context.Context, cluster string) ([]string, error) {
+// NodegroupRolesAndTypes returns the distinct node role ARNs and every instance type across the cluster's managed nodegroups.
+func (b *Bootstrapper) NodegroupRolesAndTypes(ctx context.Context, cluster string) (roles, instanceTypes []string, err error) {
 	groups, err := b.EKS.ListNodegroups(ctx, &eks.ListNodegroupsInput{ClusterName: aws.String(cluster)})
 	if err != nil {
-		return nil, fmt.Errorf("list nodegroups: %w", err)
+		return nil, nil, fmt.Errorf("list nodegroups: %w", err)
 	}
 	seen := map[string]bool{}
-	roles := []string{}
+	roles = []string{}
 	for _, ng := range groups.Nodegroups {
 		out, err := b.EKS.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
 			ClusterName:   aws.String(cluster),
 			NodegroupName: aws.String(ng),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("describe nodegroup %s: %w", ng, err)
+			return nil, nil, fmt.Errorf("describe nodegroup %s: %w", ng, err)
 		}
 		arn := aws.ToString(out.Nodegroup.NodeRole)
 		if arn != "" && !seen[arn] {
 			seen[arn] = true
 			roles = append(roles, arn)
 		}
+		instanceTypes = append(instanceTypes, out.Nodegroup.InstanceTypes...)
 	}
-	return roles, nil
+	return roles, instanceTypes, nil
 }
 
 func (b *Bootstrapper) EnsureAccess(ctx context.Context, cluster string) error {

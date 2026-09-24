@@ -4,7 +4,7 @@ brickie is a universal sandbox API and session manager for AI agents. It deploys
 
 ## The bet
 
-Sandboxes are a complement to orchestration. Companies that need sandboxes also need durable orchestration, retries, and observability, which is what Hatchet sells. brickie is therefore not trying to win on isolation primitives or filesystem technology. It is trying to be the easiest sandbox provider to run in your own Kubernetes cluster, on EKS, GKE, AKS, or kind, built from off-the-shelf parts: kubernetes-sigs/agent-sandbox for the pod runtime, overlayfs for snapshots, and Hatchet for everything stateful.
+Sandboxes are a complement to orchestration. Companies that need sandboxes also need durable orchestration, retries, and observability, which is what Hatchet sells. brickie is therefore not trying to win on isolation primitives or filesystem technology. It is trying to be the easiest sandbox provider to run in your own Kubernetes cluster, on EKS, GKE, AKS, or kind, built from off-the-shelf parts: kubernetes-sigs/agent-sandbox for the pod runtime, gVisor or Kata Containers for isolation, overlayfs for snapshots, and Hatchet for everything stateful.
 
 ## State model
 
@@ -13,49 +13,50 @@ Agent state has three layers. We snapshot the two cheap ones and defer the expen
 | Layer | Owner | Mechanism |
 | --- | --- | --- |
 | Agent loop state (messages, tool calls, results) | Hatchet durable execution | Event log and replay |
-| Filesystem state | brickie node components | overlayfs layer chain, object store blobs |
-| Process memory | phase 2, optional | gVisor or CRIU, per cloud where available |
+| Filesystem state and conversation transcript | brickie node components | overlayfs layer chain, object store blobs |
+| Process memory | phase 2, optional | gVisor or Kata checkpoint, per cloud where available |
 
-The durable log answers "what has the agent decided and observed". The filesystem snapshot answers "what does the world look like now". Every turn returns its snapshot id as part of the task output, so the durable log indexes the filesystem history.
+The durable log answers "what has the agent decided and observed". The filesystem snapshot answers "what does the world look like now". Every turn returns its snapshot id as part of the task output, so the durable log indexes the filesystem history. The conversation transcript (`.conversation.json` in the workspace) rides the snapshot, so resuming a snapshot resumes the conversation.
 
-Sandbox pods run under gVisor when the cluster has a `gvisor` runtime class, which `brickie bootstrap-aws` installs on every node. The kubernetes driver detects the runtime class at startup (`gvisor.mode`: auto, on, off) and falls back to the default runtime per pod when a node lacks runsc, so the same chart works on kind. gVisor composes cleanly with the snapshot design because the overlay chain lives entirely on the host: the sentry only proxies file I/O into the merged mount through its gofer, and the driver runs `sync` inside the sandbox before each checkpoint so buffered writes land in the upper layer before the host syncfs and tar.
+Sandbox pods run under a runtime class the kubernetes driver selects at startup (`sandbox.runtime`: auto, gvisor, kata, none). `brickie bootstrap-aws --runtime gvisor` installs runsc on every node and creates the `gvisor` class; `--runtime kata` installs kata-deploy with the Cloud Hypervisor shim and uses the `kata-clh` class, which needs bare-metal amd64 nodes for KVM. Both compose with the snapshot design because the overlay chain lives entirely on the host. gVisor proxies file I/O into the merged mount through its gofer; Kata shares it into the guest VM with virtiofs (`cache=auto`). The driver runs `sync` inside the sandbox before each checkpoint so buffered writes land in the upper layer before the host syncfs and tar. Clusters without either class, such as kind, use the default runtime with a warning.
 
-## Turn lifecycle
+## Session and turn lifecycle
 
-A turn is one durable Hatchet task named `brickie-sandbox`. The input carries the function to run (`$command`, `$prompt`, or a user function), the input payload, and an optional snapshot id. The provider:
+A session is one durable Hatchet task written by the user. Inside it, `hatchet.sandbox.create(ctx)` binds one sandbox for the life of the session, and each `exec` or `prompt` is one plain Hatchet task named `brickie-sandbox` that runs in that sandbox. The sandbox id is derived from the durable run id and creation order, so a replayed session lands in the same sandboxes.
 
-1. Restores the workspace from the snapshot (empty workspace when no snapshot id is given).
-2. Runs the turn in a sandbox.
-3. Saves the workspace as a new snapshot named after the run id.
-4. Returns `{ output, snapshotId }`.
+The turn input carries the sandbox id, the function (`$create`, `$command`, `$prompt`, `$destroy`), the input payload, and for `$create` an optional snapshot id. The provider:
 
-Retries are safe because the snapshot id in the input never changes and the output snapshot is keyed by run id. A retried turn starts from the same filesystem state and overwrites its own snapshot. A fork is two turns started from the same snapshot id. This makes arbitrary shell commands idempotent from the orchestrator's point of view.
+1. `$create`: claims a warm pod (or reuses the claim a previous attempt bound), restores the snapshot into the empty workspace, records the pod's UID on the claim.
+2. `$command` / `$prompt`: resolves the session's pod, extends its idle deadline, runs the function, checkpoints the live workspace as a new snapshot named after the run id, returns `{ output, snapshotId }`.
+3. `$destroy`: deletes the claim; agent-sandbox tears down the pod and the CSI node unmounts the workspace.
+
+Idle sessions expire through the claim's `shutdownTime`, which every turn pushes out by the provider's `--sandbox-idle-ttl`; agent-sandbox deletes the claim when it passes. A turn on an expired sandbox, or on a pod that Kubernetes replaced (the claim's recorded UID no longer matches), fails with a clear error. The provider never recreates a sandbox silently: the live workspace is gone and only a new `$create` from the last snapshot brings it back.
+
+Retries: `$create` is idempotent through claim reuse. `$command` and `$prompt` are at-least-once on a live sandbox. A retried turn re-runs in the current workspace and overwrites its own snapshot, so a non-idempotent command may run twice; the orchestrator owns that decision. A fork is a second `$create` from the same snapshot id.
 
 Checkpoint granularity is one snapshot per turn. Large outputs should go to the object store, not into the task result.
 
 ## Components
 
-### SDKs (`sdks/typescript`, `sdks/python`, `sdks/go`)
+### SDK (`sdks/typescript`)
 
-Thin clients. They spawn `brickie-sandbox` durable child tasks by name from the caller's durable context and return typed results. They make no placement decisions:
+A thin client. `hatchet.sandbox.create` returns a `Sandbox` whose `exec`, `prompt`, and `kill` spawn `brickie-sandbox` child tasks by name from the caller's durable context and return typed results. It makes no placement decisions:
 
 - `HATCHET_CLIENT_TOKEN` set: the tenant's registered provider runs the turns.
 - No token: the SDK starts an embedded Hatchet engine and spawns `brickie worker --driver local` as a sidecar.
 
-The TypeScript SDK also supports `createFunction`, which serializes a JavaScript function into the turn input (`fnSource`). The engine runs it inside the sandbox with a small node runner, so any provider can execute user functions.
-
 ### Engine (`internal/engine`)
 
-Defines the turn contract, the durable task, and the snapshot store interface. The current store is a directory of gzipped tars keyed by run id. The overlayfs path below replaces it for Kubernetes deployments.
+Defines the turn contract, the provider task, the transcript helpers, and the snapshot store interface. The tar store is a directory of gzipped tars keyed by run id, optionally offloaded to an object store. The overlayfs path below replaces it for Kubernetes deployments with the CSI driver.
 
 ### Drivers (`internal/driver`)
 
-- `local`: Docker Sandboxes through the `sbx` CLI. Used for laptop development. Docker publishes no Go client, so the CLI is the interface.
-- `kubernetes`: creates one agent-sandbox `Sandbox` resource per turn using the official v1beta1 types, waits for the pod, executes over the Kubernetes exec API, and deletes the resource when the turn ends.
+- `local`: Docker Sandboxes through the `sbx` CLI. One live micro-VM per sandbox id, kept in a process-local map with an idle reaper. Docker publishes no Go client, so the CLI is the interface.
+- `kubernetes`: one agent-sandbox `SandboxClaim` per sandbox id, bound from a per-image `SandboxWarmPool`. The claim is the durable session registry, so a provider restart loses nothing. Turns exec over the Kubernetes exec API. Turns on the same sandbox are serialized with a per-process lock; add a Hatchet concurrency key on `input.sandboxId` before running more than one provider replica.
 
 ### Provider (`brickie worker`)
 
-The provider is the Hatchet worker: it registers the `brickie-sandbox` durable task and executes turns with the configured driver. There is deliberately no brickie Kubernetes controller or CRD. Desired state lives in Hatchet's run history, not etcd, so retries, timeouts, and replay come from the orchestrator, and the one reconciler in the picture is agent-sandbox's, which turns each `Sandbox` resource into a pod. A reconciler of our own becomes worth writing only if a genuinely declarative concept lands, such as warm pools or TTL'd long-lived sessions, and that decision is deferred until then.
+The provider is the Hatchet worker: it registers the `brickie-sandbox` task and executes turns with the configured driver. There is deliberately no brickie Kubernetes controller or CRD. Desired state lives in Hatchet's run history and in agent-sandbox's claims, so retries, timeouts, and replay come from the orchestrator and idle expiry comes from agent-sandbox's reconciler.
 
 This shape means the cluster only ever dials out to Hatchet. There is no inbound API into the customer account.
 
@@ -71,12 +72,11 @@ Implements the filesystem snapshot mechanics:
   sandboxes/<id>/{upper,work,merged}
 ```
 
-- Mount: build the lowerdir chain from a snapshot manifest, mount overlay with a fresh upper.
-- Checkpoint: `syncfs` while mounted, unmount, tar the upper, hash it, store it as a new layer, write a manifest for the new snapshot id, remount with the extended chain and an empty upper. The syncfs step keeps the agent-visible pause around tens of milliseconds instead of hundreds.
+- Mount: build the lowerdir chain from a snapshot manifest, mount overlay with a fresh upper. Sessions start from an empty chain.
+- Restore: at `$create`, copy a snapshot's merged view into the live mount through a read-only overlay of its chain. The kernel resolves whiteouts during the copy.
+- Checkpoint: `syncfs` while mounted, tar the upper in place, hash it, store it as a layer, write a manifest for the new snapshot id. The mount stays up. On a live session every checkpoint tars the cumulative upper, so the cost grows with the changes made in the session and earlier blobs of the same session become unreferenced. Incremental layers between turns are a measured follow-up.
 - Fork: mount the same chain with a fresh upper. No data is copied.
 - Restore on another node: pull missing layer blobs from the object store, extract, mount.
-
-Measured on ext4 with a single vCPU, a delta checkpoint of a 450 MB workspace takes about 380 ms and a fork about 4 ms. Full checkpoints and cold restores are tar-bound. See the design notes for the full benchmark table.
 
 ### Object store (`internal/overlay/remote.go`)
 
@@ -86,7 +86,7 @@ A planned change is to produce layers with `containerd/archive` so they are byte
 
 ### CSI driver (`internal/csi`, `brickie csi-node`)
 
-A node plugin that mounts overlay workspaces into sandbox pods as CSI ephemeral volumes. The volume context carries the sandbox id and the snapshot id. Publish mounts the chain and binds the merged directory onto the kubelet target path. `podInfoOnMount` is enabled so the driver can authorize mounts per pod. The plugin also serves a small HTTP API (`POST /v1/checkpoint`) that the provider calls between turns to checkpoint a live workspace without unmounting it from the pod.
+A node plugin that mounts overlay workspaces into sandbox pods as CSI ephemeral volumes keyed by pod name. Publish mounts an empty chain and binds the merged directory onto the kubelet target path; unpublish, which follows pod deletion, unmounts it. The plugin also serves a small HTTP API (`POST /v1/restore`, `POST /v1/checkpoint`) that the provider calls at `$create` and after every turn.
 
 The DaemonSet is disabled by default in the chart (`csi.enabled`). Until it is enabled, the kubernetes driver uses the tar-over-exec path from the engine store.
 
@@ -104,13 +104,13 @@ One Helm chart (`helm/brickie`) installs:
 - the agent-sandbox controller and CRDs as a vendored subchart, skippable when the cluster already has them,
 - the CSI node DaemonSet, off by default.
 
-`brickie bootstrap-kind` produces a working local cluster from nothing. `brickie dev` configures Docker Sandboxes for laptop use without any cluster.
+`brickie bootstrap-kind` produces a working local cluster from nothing. `brickie bootstrap-aws` produces an EKS install with gVisor or Kata. `hack/run-demo.sh` configures Docker Sandboxes and a Compose-hosted Hatchet for laptop use without any cluster.
 
 ## Roadmap
 
-1. Overlay workspaces wired into the kubernetes driver via the CSI path, replacing tar-over-exec.
-2. Long-lived sessions: mount once, checkpoint between turns through the node HTTP API, suspend by deleting the pod and keeping the chain. Whether this warrants a CRD and reconciler is decided when it is built.
+1. Incremental overlay layers between turns of one session, so a checkpoint costs the turn's diff rather than the session's.
+2. Hatchet concurrency key on the sandbox id, so the provider can run more than one replica.
 3. Credential sidecar as described above.
 4. Sandbox-scoped Hatchet tokens issued through Kubernetes service account OIDC federation.
 5. Image build paths: template snapshots first (fork base, run steps, checkpoint), BuildKit for full images, eventually the whole rootfs as a layer chain.
-6. Memory snapshots where the platform provides them (gVisor checkpoint on GKE today, upstream pod checkpointing when it lands). These slot in as driver capabilities and do not change the SDK contract.
+6. Memory snapshots where the platform provides them (Kata and gVisor checkpoint, upstream pod checkpointing when it lands). These slot in as driver capabilities and do not change the SDK contract.

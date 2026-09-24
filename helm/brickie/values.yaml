@@ -16,6 +16,8 @@ sandbox:
   namespace: ""
   image: alpine:3
   turnTimeout: 15m
+  idleTTL: 30m
+  runtime: auto
   credentials: {}
   existingCredentialsSecret: ""
   credentialNames: []
@@ -30,9 +32,6 @@ injector:
   secret: ""
   image: ""
   catalog: {}
-
-gvisor:
-  mode: auto
 
 csi:
   enabled: false

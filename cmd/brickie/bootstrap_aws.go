@@ -31,6 +31,7 @@ type awsBootFlags struct {
 	existingCluster string
 	clusterName     string
 	instanceType    string
+	runtime         string
 	nodeCount       int
 	subnetIDs       []string
 	namespace       string
@@ -48,7 +49,7 @@ func bootstrapAWSCmd() *cobra.Command {
 	f := awsBootFlags{}
 	cmd := &cobra.Command{
 		Use:   "bootstrap-aws",
-		Short: "Create or reuse an EKS cluster and deploy brickie with gVisor sandboxes, ECR, and S3 snapshots",
+		Short: "Create or reuse an EKS cluster and deploy brickie with gVisor or Kata sandboxes, ECR, and S3 snapshots",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBootstrapAWS(cmd, f)
 		},
@@ -57,7 +58,8 @@ func bootstrapAWSCmd() *cobra.Command {
 	cmd.Flags().StringVar(&f.region, "region", "", "AWS region")
 	cmd.Flags().StringVar(&f.existingCluster, "existing-cluster", "", "use this existing EKS cluster instead of creating one")
 	cmd.Flags().StringVar(&f.clusterName, "cluster-name", "", "name for a new EKS cluster")
-	cmd.Flags().StringVar(&f.instanceType, "instance-type", "m5.large", "node instance type for a new cluster")
+	cmd.Flags().StringVar(&f.instanceType, "instance-type", "m5.large", "node instance type for a new cluster (kata needs a .metal amd64 type)")
+	cmd.Flags().StringVar(&f.runtime, "runtime", "gvisor", "sandbox runtime to install on the nodes: gvisor or kata (Kata Containers with Cloud Hypervisor)")
 	cmd.Flags().IntVar(&f.nodeCount, "node-count", 2, "node count for a new cluster")
 	cmd.Flags().StringSliceVar(&f.subnetIDs, "subnet-ids", nil, "subnet ids for a new cluster (default: the default VPC's subnets)")
 	cmd.Flags().StringVarP(&f.namespace, "namespace", "n", envOr("NAMESPACE", "brickie"), "namespace for the provider and sandboxes")
@@ -111,6 +113,9 @@ func runBootstrapAWS(cmd *cobra.Command, f awsBootFlags) error {
 	}
 	if f.token == "" {
 		return errors.New("HATCHET_CLIENT_TOKEN is required: export it or pass --hatchet-token")
+	}
+	if f.runtime != "gvisor" && f.runtime != "kata" {
+		return fmt.Errorf("unknown --runtime %q (gvisor|kata)", f.runtime)
 	}
 	if !have("docker") {
 		return errors.New("docker is required")
@@ -186,8 +191,13 @@ func runBootstrapAWS(cmd *cobra.Command, f awsBootFlags) error {
 			}).Value(&f.clusterName)); err != nil {
 				return err
 			}
+			instanceTypes := []string{"m5.large", "m5.xlarge", "c5.xlarge", "t3.xlarge", "m7g.large", "m7g.xlarge"}
+			if f.runtime == "kata" {
+				instanceTypes = []string{"m5.metal", "c5.metal", "m6i.metal", "c6i.metal"}
+				f.instanceType = instanceTypes[0]
+			}
 			if err := askOne(huh.NewSelect[string]().Title("Node instance type").Options(
-				huh.NewOptions("m5.large", "m5.xlarge", "c5.xlarge", "t3.xlarge", "m7g.large", "m7g.xlarge")...,
+				huh.NewOptions(instanceTypes...)...,
 			).Value(&f.instanceType)); err != nil {
 				return err
 			}
@@ -227,11 +237,14 @@ func runBootstrapAWS(cmd *cobra.Command, f awsBootFlags) error {
 		if !clusterNameRe.MatchString(clusterName) {
 			return fmt.Errorf("invalid cluster name %q", clusterName)
 		}
+		if err := checkKataInstanceType(f.runtime, f.instanceType); err != nil {
+			return err
+		}
 		if interactive() {
 			confirmed := false
 			if err := askOne(huh.NewConfirm().
 				Title(fmt.Sprintf("Provision EKS cluster %q?", clusterName)).
-				Description(fmt.Sprintf("account %s (profile %s), region %s\n%d x %s nodes, IAM roles, gVisor, ECR repository, S3 snapshot bucket", b.AccountID, profileName, b.Region, f.nodeCount, f.instanceType)).
+				Description(fmt.Sprintf("account %s (profile %s), region %s\n%d x %s nodes, IAM roles, %s, ECR repository, S3 snapshot bucket", b.AccountID, profileName, b.Region, f.nodeCount, f.instanceType, runtimeLabel(f.runtime))).
 				Affirmative("Provision").Negative("Cancel").
 				Value(&confirmed)); err != nil {
 				return err
@@ -290,11 +303,17 @@ func runBootstrapAWS(cmd *cobra.Command, f awsBootFlags) error {
 		return fmt.Errorf("cluster %s is %s, not ACTIVE", clusterName, cluster.Status)
 	}
 	if !create {
-		if nodeRoles, err = b.NodegroupRoles(ctx, clusterName); err != nil {
+		var instanceTypes []string
+		if nodeRoles, instanceTypes, err = b.NodegroupRolesAndTypes(ctx, clusterName); err != nil {
 			return err
 		}
 		if len(nodeRoles) == 0 {
 			return fmt.Errorf("cluster %s has no managed nodegroups; self-managed nodes are not supported by bootstrap-aws", clusterName)
+		}
+		for _, it := range instanceTypes {
+			if err := checkKataInstanceType(f.runtime, it); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -333,7 +352,19 @@ func runBootstrapAWS(cmd *cobra.Command, f awsBootFlags) error {
 	}
 	logger.Info("kubeconfig updated", "context", kubeContext)
 
-	if err := step(ctx, "Installing gVisor on all nodes", func(sctx context.Context) error {
+	restCfg, err := b.RESTConfig(ctx, cluster)
+	if err != nil {
+		return err
+	}
+	runtimeClass := "gvisor"
+	if err := step(ctx, fmt.Sprintf("Installing %s on all nodes", runtimeLabel(f.runtime)), func(sctx context.Context) error {
+		if f.runtime == "kata" {
+			runtimeClass = awsboot.KataRuntimeClass
+			if kerr := awsboot.EnsureKata(sctx, restCfg); kerr != nil {
+				return kerr
+			}
+			return awsboot.WaitKataReady(sctx, clientset, 10*time.Minute)
+		}
 		if gerr := awsboot.EnsureGVisor(sctx, clientset); gerr != nil {
 			return gerr
 		}
@@ -341,7 +372,7 @@ func runBootstrapAWS(cmd *cobra.Command, f awsBootFlags) error {
 	}); err != nil {
 		return err
 	}
-	logger.Info("gvisor installed", "runtimeClass", "gvisor")
+	logger.Info("sandbox runtime installed", "runtime", f.runtime, "runtimeClass", runtimeClass)
 
 	platform := f.imagePlatform
 	if platform == "" {
@@ -389,10 +420,6 @@ func runBootstrapAWS(cmd *cobra.Command, f awsBootFlags) error {
 		return err
 	}
 
-	restCfg, err := b.RESTConfig(ctx, cluster)
-	if err != nil {
-		return err
-	}
 	agentSandboxEnabled := true
 	if _, err := clientset.Discovery().ServerResourcesForGroupVersion("agents.x-k8s.io/v1beta1"); err == nil {
 		if installed, herr := awsboot.ReleaseExists(restCfg, f.namespace, f.release); herr == nil && !installed {
@@ -408,7 +435,7 @@ func runBootstrapAWS(cmd *cobra.Command, f awsBootFlags) error {
 		"csi":           map[string]any{"enabled": true, "objectStore": objectStore},
 		"objectStore":   objectStore,
 	}
-	sandboxValues := map[string]any{}
+	sandboxValues := map[string]any{"runtime": f.runtime}
 	if f.sandboxImg != "" {
 		sandboxValues["image"] = f.sandboxImg
 	}
@@ -422,11 +449,9 @@ func runBootstrapAWS(cmd *cobra.Command, f awsBootFlags) error {
 	if len(credentials) > 0 {
 		sandboxValues["credentials"] = credentials
 	}
-	if len(sandboxValues) > 0 {
-		values["sandbox"] = sandboxValues
-	}
+	values["sandbox"] = sandboxValues
 	if err := step(ctx, "Installing the brickie chart", func(sctx context.Context) error {
-		return awsboot.InstallChart(sctx, restCfg, f.namespace, f.release, f.chart, values)
+		return awsboot.InstallChart(sctx, restCfg, f.namespace, f.release, f.chart, "", values)
 	}); err != nil {
 		return err
 	}
@@ -443,9 +468,26 @@ func runBootstrapAWS(cmd *cobra.Command, f awsBootFlags) error {
 		"context:    " + kubeContext,
 		"image:      " + imageRef,
 		"snapshots:  " + objectStore,
-		"sandboxes:  gVisor (runtime class \"gvisor\")",
+		"sandboxes:  " + runtimeLabel(f.runtime) + " (runtime class \"" + runtimeClass + "\")",
 	}, "\n"))
 	fmt.Fprintln(os.Stderr, "\n"+summary)
+	return nil
+}
+
+func runtimeLabel(runtime string) string {
+	if runtime == "kata" {
+		return "Kata Containers (Cloud Hypervisor)"
+	}
+	return "gVisor"
+}
+
+func checkKataInstanceType(runtime, instanceType string) error {
+	if runtime != "kata" {
+		return nil
+	}
+	if !awsboot.IsMetal(instanceType) || awsboot.IsGraviton(instanceType) {
+		return fmt.Errorf("kata needs KVM and Cloud Hypervisor is amd64-only: use a bare-metal x86 instance type such as m5.metal, not %s", instanceType)
+	}
 	return nil
 }
 

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -45,6 +46,12 @@ func newTurnRunner(opts ProviderOpts) *turnRunner {
 }
 
 func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log func(string)) (TurnResult, error) {
+	if input.SandboxID == "" {
+		return TurnResult{}, errors.New("sandboxId is required: create the sandbox with hatchet.sandbox.create")
+	}
+	if input.SnapshotID != "" && input.Fn != CreateFn {
+		return TurnResult{}, fmt.Errorf("snapshotId is only accepted by %s: a live sandbox cannot be restored in place", CreateFn)
+	}
 	resolved, err := r.imageProvider.Resolve(ctx, image.Spec{Ref: input.Image})
 	if err != nil {
 		if log != nil {
@@ -53,10 +60,9 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		return TurnResult{}, fmt.Errorf("resolve image: %w", err)
 	}
 	req := TurnRequest{
-		SandboxName:  "brickie-" + runID,
+		SandboxName:  "brickie-" + input.SandboxID,
 		Image:        resolved.Ref,
 		Fn:           input.Fn,
-		FnSource:     input.FnSource,
 		Input:        input.Input,
 		SnapshotID:   input.SnapshotID,
 		CheckpointID: runID,
@@ -79,6 +85,10 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		return TurnResult{}, err
 	}
 	req.Logf("driver finished in %s", time.Since(started).Round(time.Millisecond))
+	if input.Fn == CreateFn || input.Fn == DestroyFn || (resp.SnapshotTar == nil && !r.native) {
+		req.Logf("turn done: no snapshot")
+		return TurnResult{Output: resp.Output, Timings: resp.Timings}, nil
+	}
 	if !r.native {
 		if err := r.opts.Store.Write(runID, resp.SnapshotTar); err != nil {
 			req.Logf("write snapshot %s failed: %v", runID, err)
@@ -92,7 +102,7 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 
 func NewProviderTask(client *hatchet.Client, opts ProviderOpts) *hatchet.StandaloneTask {
 	runner := newTurnRunner(opts)
-	return client.NewStandaloneDurableTask(TaskName, func(ctx hatchet.DurableContext, input TurnInput) (TurnResult, error) {
+	return client.NewStandaloneTask(TaskName, func(ctx hatchet.Context, input TurnInput) (TurnResult, error) {
 		runID := ctx.WorkflowRunId()
 		log := func(msg string) {
 			fmt.Fprintf(os.Stderr, "brickie: [%s] %s\n", runID, msg)

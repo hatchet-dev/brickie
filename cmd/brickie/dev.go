@@ -150,7 +150,7 @@ func devSummary(tokenSet bool) string {
 		"brickie is ready",
 		"",
 		"  sandboxes    Docker Sandboxes micro-VMs on this machine",
-		"               no host env vars are injected; the per-turn workspace dir is the only shared path",
+		"               no host env vars are injected; each sandbox's workspace dir is the only shared path",
 		"  snapshots    ~/.brickie/snapshots (pruned after 7 days)",
 		hatchetLine,
 		hatchetDetail,

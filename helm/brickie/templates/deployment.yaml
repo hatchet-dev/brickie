@@ -36,6 +36,10 @@ spec:
               value: {{ .Values.sandbox.image | quote }}
             - name: BRICKIE_TURN_TIMEOUT
               value: {{ .Values.sandbox.turnTimeout | quote }}
+            - name: BRICKIE_SANDBOX_IDLE_TTL
+              value: {{ .Values.sandbox.idleTTL | quote }}
+            - name: BRICKIE_RUNTIME
+              value: {{ .Values.sandbox.runtime | quote }}
             {{- if .Values.sandbox.warmImages }}
             - name: BRICKIE_WARM_IMAGES
               value: {{ join "," .Values.sandbox.warmImages | quote }}
@@ -52,8 +56,6 @@ spec:
             - name: BRICKIE_OVERLAY
               value: "true"
             {{- end }}
-            - name: BRICKIE_GVISOR
-              value: {{ .Values.gvisor.mode | quote }}
             {{- if .Values.injector.enabled }}
             {{- if not .Values.injector.secret }}
             {{- fail "injector.secret is required when injector.enabled: a Secret with BRICKIE_INJECTOR_PUBLIC_KEY and BRICKIE_INJECTOR_PRIVATE_KEY (run `brickie injector keygen`)" }}

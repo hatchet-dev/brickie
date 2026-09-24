@@ -54,12 +54,12 @@ func (s FSSnapshotStore) Prune(maxAge time.Duration) {
 }
 
 func (s FSSnapshotStore) Write(id string, tar []byte) error {
-	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return err
 	}
 	dest := filepath.Join(s.Dir, id+".tar.gz")
 	tmp := fmt.Sprintf("%s.tmp-%d", dest, os.Getpid())
-	if err := os.WriteFile(tmp, tar, 0o644); err != nil {
+	if err := os.WriteFile(tmp, tar, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, dest)

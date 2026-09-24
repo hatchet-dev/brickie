@@ -8,22 +8,26 @@ import (
 
 const TaskName = "brickie-sandbox"
 
+// Turn functions the SDK can request. Create and Destroy manage the sandbox
+// lifecycle; Command and Prompt run inside it.
 const (
+	CreateFn  = "$create"
 	CommandFn = "$command"
 	PromptFn  = "$prompt"
+	DestroyFn = "$destroy"
 )
 
 type TurnInput struct {
+	SandboxID  string          `json:"sandboxId"`
 	Image      string          `json:"image,omitempty"`
 	Fn         string          `json:"fn"`
-	FnSource   string          `json:"fnSource,omitempty"`
 	Input      json.RawMessage `json:"input"`
 	SnapshotID string          `json:"snapshotId,omitempty"`
 }
 
 type TurnResult struct {
 	Output     json.RawMessage  `json:"output"`
-	SnapshotID string           `json:"snapshotId"`
+	SnapshotID string           `json:"snapshotId,omitempty"`
 	Timings    map[string]int64 `json:"timings,omitempty"`
 }
 
@@ -31,7 +35,6 @@ type TurnRequest struct {
 	SandboxName  string
 	Image        string
 	Fn           string
-	FnSource     string
 	Input        json.RawMessage
 	SnapshotTar  []byte
 	SnapshotID   string

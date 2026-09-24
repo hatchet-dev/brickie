@@ -54,26 +54,36 @@ type Options struct {
 	Image        string
 	Credentials  []string
 	ReadyTimeout time.Duration
+	IdleTTL      time.Duration
 	Overlay      bool
 	CSIPort      int
 	Injector     InjectorOptions
-	GVisor       string
+	Runtime      string
 	WarmImages   []string
 	WarmReplicas int
 }
 
-const gvisorRuntimeClass = "gvisor"
+const (
+	gvisorRuntimeClass = "gvisor"
+	kataRuntimeClass   = "kata-clh"
+)
+
+var runtimeClasses = map[string]string{"gvisor": gvisorRuntimeClass, "kata": kataRuntimeClass}
 
 const csiNodeLabel = "app.kubernetes.io/name=brickie-csi-node"
 
+const podUIDAnnotation = "brickie.hatchet.run/pod-uid"
+
 type Driver struct {
-	opts      Options
-	restCfg   *rest.Config
-	client    ctrlclient.Client
-	clientset *kubernetes.Clientset
-	gvisor    bool
-	poolMu    sync.Mutex
-	pools     map[string]string
+	opts         Options
+	restCfg      *rest.Config
+	client       ctrlclient.Client
+	clientset    *kubernetes.Clientset
+	runtimeClass string
+	poolMu       sync.Mutex
+	pools        map[string]string
+	sessionMu    sync.Mutex
+	sessions     map[string]*sync.Mutex
 }
 
 func New(opts Options) (*Driver, error) {
@@ -85,6 +95,9 @@ func New(opts Options) (*Driver, error) {
 	}
 	if opts.ReadyTimeout == 0 {
 		opts.ReadyTimeout = 5 * time.Minute
+	}
+	if opts.IdleTTL == 0 {
+		opts.IdleTTL = 30 * time.Minute
 	}
 	if opts.CSIPort == 0 {
 		opts.CSIPort = 7078
@@ -122,8 +135,8 @@ func New(opts Options) (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &Driver{opts: opts, restCfg: restCfg, client: c, clientset: cs, pools: map[string]string{}}
-	if err := d.detectGVisor(); err != nil {
+	d := &Driver{opts: opts, restCfg: restCfg, client: c, clientset: cs, pools: map[string]string{}, sessions: map[string]*sync.Mutex{}}
+	if err := d.detectRuntime(); err != nil {
 		return nil, err
 	}
 	if err := d.storeHatchetTokenForSidecar(); err != nil {
@@ -165,30 +178,42 @@ func (d *Driver) storeHatchetTokenForSidecar() error {
 	return nil
 }
 
-func (d *Driver) detectGVisor() error {
-	mode := d.opts.GVisor
+func (d *Driver) detectRuntime() error {
+	mode := d.opts.Runtime
 	if mode == "" {
 		mode = "auto"
 	}
-	switch mode {
-	case "off":
-		return nil
-	case "auto", "on":
-	default:
-		return fmt.Errorf("unknown gvisor mode %q (auto|on|off)", mode)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := d.clientset.NodeV1().RuntimeClasses().Get(ctx, gvisorRuntimeClass, metav1.GetOptions{})
-	if err == nil {
-		d.gvisor = true
-		fmt.Fprintf(os.Stderr, "brickie: gvisor runtime class found; sandboxes run under gVisor\n")
+	has := func(name string) bool {
+		_, err := d.clientset.NodeV1().RuntimeClasses().Get(ctx, name, metav1.GetOptions{})
+		return err == nil
+	}
+	switch mode {
+	case "none":
 		return nil
+	case "auto":
+		for _, rc := range []string{kataRuntimeClass, gvisorRuntimeClass} {
+			if has(rc) {
+				d.runtimeClass = rc
+				break
+			}
+		}
+		if d.runtimeClass == "" {
+			fmt.Fprintf(os.Stderr, "brickie: no %s or %s runtime class; sandboxes run with the default runtime\n", kataRuntimeClass, gvisorRuntimeClass)
+			return nil
+		}
+	default:
+		rc, ok := runtimeClasses[mode]
+		if !ok {
+			return fmt.Errorf("unknown runtime %q (auto|gvisor|kata|none)", mode)
+		}
+		if !has(rc) {
+			return fmt.Errorf("runtime %s requested but the %q runtime class is unavailable: run brickie bootstrap-aws --runtime %s or hack/apply-runtime", mode, rc, mode)
+		}
+		d.runtimeClass = rc
 	}
-	if mode == "on" {
-		return fmt.Errorf("gvisor mode is on but the %q runtime class is unavailable (%v): install runsc on the nodes and create the runtime class, or run brickie bootstrap-aws", gvisorRuntimeClass, err)
-	}
-	fmt.Fprintf(os.Stderr, "brickie: gvisor runtime class not found (%v); sandboxes run with the default runtime\n", err)
+	fmt.Fprintf(os.Stderr, "brickie: sandboxes run under runtime class %s\n", d.runtimeClass)
 	return nil
 }
 
@@ -301,7 +326,7 @@ func buildInjectorEnv(publicKey string, port int, credentials []string, getenv f
 }
 
 // buildPodSpec is the whole sandbox pod shape. Warm pool templates are built
-// from it, so nothing in it may vary per turn: the workspace CSI volume
+// from it, so nothing in it may vary per session: the workspace CSI volume
 // carries no attributes and the CSI node plugin keys the mount by pod name.
 func (d *Driver) buildPodSpec(image string) (corev1.PodSpec, error) {
 	sandboxEnv, err := d.injectedEnv()
@@ -350,8 +375,8 @@ func (d *Driver) buildPodSpec(image string) (corev1.PodSpec, error) {
 			MountPath: engine.Workspace,
 		}}
 	}
-	if d.gvisor {
-		rc := gvisorRuntimeClass
+	if d.runtimeClass != "" {
+		rc := d.runtimeClass
 		podSpec.RuntimeClassName = &rc
 	}
 	return podSpec, nil
@@ -423,59 +448,65 @@ func (d *Driver) upsert(ctx context.Context, obj ctrlclient.Object, copySpec fun
 	return d.client.Update(ctx, existing)
 }
 
-// claim checks a sandbox out of the image's warm pool. Retried runs reuse the
-// claim name, so a stale claim from a failed attempt is deleted first and a
-// fresh warm pod is bound.
-func (d *Driver) claim(ctx context.Context, pool, name string) (string, func(), error) {
+func (d *Driver) shutdownTime() *metav1.Time {
+	t := metav1.NewTime(time.Now().Add(d.opts.IdleTTL))
+	return &t
+}
+
+func (d *Driver) claimKey(name string) ctrlclient.ObjectKey {
+	return ctrlclient.ObjectKey{Namespace: d.opts.Namespace, Name: name}
+}
+
+func (d *Driver) patchClaim(ctx context.Context, name string, patch map[string]any) error {
+	body, _ := json.Marshal(patch)
+	claim := &extensionsv1beta1.SandboxClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: d.opts.Namespace}}
+	return d.client.Patch(ctx, claim, ctrlclient.RawPatch(types.MergePatchType, body))
+}
+
+func (d *Driver) ensureClaim(ctx context.Context, pool, name string) (*extensionsv1beta1.SandboxClaim, error) {
 	newClaim := func() *extensionsv1beta1.SandboxClaim {
 		return &extensionsv1beta1.SandboxClaim{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: d.opts.Namespace},
 			Spec: extensionsv1beta1.SandboxClaimSpec{
 				WarmPoolRef: extensionsv1beta1.SandboxWarmPoolRef{Name: pool},
+				Lifecycle: &extensionsv1beta1.Lifecycle{
+					ShutdownTime:   d.shutdownTime(),
+					ShutdownPolicy: extensionsv1beta1.ShutdownPolicyDelete,
+				},
 			},
 		}
 	}
-	claim := newClaim()
-	err := d.client.Create(ctx, claim)
+	err := d.client.Create(ctx, newClaim())
 	if apierrors.IsAlreadyExists(err) {
-		if err := d.client.Delete(ctx, claim); err != nil && !apierrors.IsNotFound(err) {
-			return "", nil, fmt.Errorf("delete stale claim %s: %w", name, err)
+		var existing extensionsv1beta1.SandboxClaim
+		if err := d.client.Get(ctx, d.claimKey(name), &existing); err != nil && !apierrors.IsNotFound(err) {
+			return nil, err
 		}
-		deadline := time.Now().Add(2 * time.Minute)
-		for time.Now().Before(deadline) {
-			var existing extensionsv1beta1.SandboxClaim
-			if apierrors.IsNotFound(d.client.Get(ctx, ctrlclient.ObjectKeyFromObject(claim), &existing)) {
-				break
+		if existing.DeletionTimestamp != nil {
+			if err := d.waitClaimGone(ctx, name); err != nil {
+				return nil, err
 			}
-			select {
-			case <-ctx.Done():
-				return "", nil, ctx.Err()
-			case <-time.After(300 * time.Millisecond):
-			}
+			err = d.client.Create(ctx, newClaim())
+		} else {
+			err = nil
 		}
-		claim = newClaim()
-		err = d.client.Create(ctx, claim)
 	}
 	if err != nil {
-		return "", nil, fmt.Errorf("create sandbox claim %s: %w", name, err)
-	}
-	cleanup := func() {
-		_ = d.client.Delete(context.Background(), claim)
+		return nil, fmt.Errorf("create sandbox claim %s: %w", name, err)
 	}
 	deadline := time.Now().Add(d.opts.ReadyTimeout)
 	var last *extensionsv1beta1.SandboxClaim
 	for time.Now().Before(deadline) {
 		var current extensionsv1beta1.SandboxClaim
-		if err := d.client.Get(ctx, ctrlclient.ObjectKeyFromObject(claim), &current); err == nil {
+		if err := d.client.Get(ctx, d.claimKey(name), &current); err == nil {
 			last = &current
 			if current.Status.SandboxStatus.Name != "" && meta.IsStatusConditionTrue(current.Status.Conditions, "Ready") {
-				return current.Status.SandboxStatus.Name, cleanup, nil
+				return &current, nil
 			}
 		}
 		select {
 		case <-ctx.Done():
-			cleanup()
-			return "", nil, ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(300 * time.Millisecond):
 		}
 	}
@@ -485,8 +516,51 @@ func (d *Driver) claim(ctx context.Context, pool, name string) (string, func(), 
 			detail = fmt.Sprintf("%s: %s", c.Reason, c.Message)
 		}
 	}
-	cleanup()
-	return "", nil, fmt.Errorf("sandbox claim %s not bound within %s (%s)", name, d.opts.ReadyTimeout, detail)
+	return nil, fmt.Errorf("sandbox claim %s not bound within %s (%s)", name, d.opts.ReadyTimeout, detail)
+}
+
+func (d *Driver) waitClaimGone(ctx context.Context, name string) error {
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		var existing extensionsv1beta1.SandboxClaim
+		if apierrors.IsNotFound(d.client.Get(ctx, d.claimKey(name), &existing)) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("previous sandbox claim %s is still terminating", name)
+}
+
+func (d *Driver) resolveSession(ctx context.Context, name string) (*corev1.Pod, error) {
+	var claim extensionsv1beta1.SandboxClaim
+	err := d.client.Get(ctx, d.claimKey(name), &claim)
+	gone := fmt.Errorf("sandbox %s is gone (expired after idle or destroyed); create a new sandbox from its last snapshot", name)
+	switch {
+	case apierrors.IsNotFound(err):
+		return nil, gone
+	case err != nil:
+		return nil, err
+	case claim.DeletionTimestamp != nil, claim.Status.SandboxStatus.Name == "", !meta.IsStatusConditionTrue(claim.Status.Conditions, "Ready"):
+		return nil, gone
+	}
+	pod, err := d.clientset.CoreV1().Pods(d.opts.Namespace).Get(ctx, claim.Status.SandboxStatus.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, gone
+	}
+	if err != nil {
+		return nil, err
+	}
+	if string(pod.UID) != claim.Annotations[podUIDAnnotation] {
+		return nil, fmt.Errorf("sandbox %s was replaced (pod %s restarted); its live workspace is lost, create a new sandbox from its last snapshot", name, pod.Name)
+	}
+	if err := d.patchClaim(ctx, name, map[string]any{"spec": map[string]any{"lifecycle": map[string]any{"shutdownTime": d.shutdownTime()}}}); err != nil {
+		return nil, fmt.Errorf("extend sandbox %s deadline: %w", name, err)
+	}
+	return pod, nil
 }
 
 type execResult struct {
@@ -555,7 +629,7 @@ func (d *Driver) podWarnings(ctx context.Context, pod string) string {
 	return strings.Join(msgs, "; ")
 }
 
-func (d *Driver) waitReady(ctx context.Context, pod string) error {
+func (d *Driver) waitReady(ctx context.Context, pod string) (*corev1.Pod, error) {
 	deadline := time.Now().Add(d.opts.ReadyTimeout)
 	var last *corev1.Pod
 	for time.Now().Before(deadline) {
@@ -568,18 +642,18 @@ func (d *Driver) waitReady(ctx context.Context, pod string) error {
 					ready = ready && cs.Ready
 				}
 				if ready {
-					return nil
+					return p, nil
 				}
 			}
 			if p.Status.Phase == corev1.PodPending {
 				if w := d.podWarnings(ctx, pod); isRuntimeHandlerError(errors.New(w)) {
-					return fmt.Errorf("sandbox pod %s cannot start: %s", pod, w)
+					return nil, fmt.Errorf("sandbox pod %s cannot start: %s", pod, w)
 				}
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
@@ -587,12 +661,12 @@ func (d *Driver) waitReady(ctx context.Context, pod string) error {
 	if w := d.podWarnings(ctx, pod); w != "" {
 		detail += "; " + w
 	}
-	return fmt.Errorf("sandbox pod %s not ready within %s (%s)", pod, d.opts.ReadyTimeout, detail)
+	return nil, fmt.Errorf("sandbox pod %s not ready within %s (%s)", pod, d.opts.ReadyTimeout, detail)
 }
 
 func isRuntimeHandlerError(err error) bool {
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "runsc") || strings.Contains(msg, "runtime handler")
+	return strings.Contains(msg, "runsc") || strings.Contains(msg, "kata") || strings.Contains(msg, "runtime handler")
 }
 
 func podStateSummary(p *corev1.Pod) string {
@@ -616,56 +690,117 @@ func podStateSummary(p *corev1.Pod) string {
 	return strings.Join(parts, "; ")
 }
 
+func (d *Driver) sessionLock(name string) *sync.Mutex {
+	d.sessionMu.Lock()
+	defer d.sessionMu.Unlock()
+	mu, ok := d.sessions[name]
+	if !ok {
+		mu = &sync.Mutex{}
+		d.sessions[name] = mu
+	}
+	return mu
+}
+
 func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.TurnResponse, error) {
+	mu := d.sessionLock(req.SandboxName)
+	mu.Lock()
+	defer mu.Unlock()
+	switch req.Fn {
+	case engine.CreateFn:
+		return d.create(ctx, req)
+	case engine.DestroyFn:
+		return d.destroy(ctx, req)
+	default:
+		return d.run(ctx, req)
+	}
+}
+
+func newTimings() (map[string]int64, func(string, time.Time)) {
+	timings := map[string]int64{}
+	return timings, func(name string, start time.Time) {
+		timings[name] = time.Since(start).Milliseconds()
+	}
+}
+
+func (d *Driver) create(ctx context.Context, req engine.TurnRequest) (engine.TurnResponse, error) {
 	image := req.Image
 	if image == "" {
 		image = d.opts.Image
 	}
-	timings := map[string]int64{}
-	phase := func(name string, start time.Time) {
-		timings[name] = time.Since(start).Milliseconds()
-	}
+	timings, phase := newTimings()
 	pool, err := d.ensurePool(ctx, image)
 	if err != nil {
 		return engine.TurnResponse{}, err
 	}
 	claimStart := time.Now()
-	pod, cleanup, err := d.claim(ctx, pool, req.SandboxName)
+	claim, err := d.ensureClaim(ctx, pool, req.SandboxName)
 	if err != nil {
 		return engine.TurnResponse{}, err
 	}
-	defer func() {
-		cleanup()
-		req.Logf("sandbox claim %s released (pod %s)", req.SandboxName, pod)
-	}()
-	if err := d.waitReady(ctx, pod); err != nil {
-		req.Logf("sandbox %s not ready: %v", pod, err)
+	pod, err := d.waitReady(ctx, claim.Status.SandboxStatus.Name)
+	if err != nil {
+		req.Logf("sandbox %s not ready: %v", claim.Status.SandboxStatus.Name, err)
 		return engine.TurnResponse{}, err
 	}
 	phase("claim", claimStart)
-	req.Logf("sandbox %s claimed from pool %s in %s", pod, pool, time.Since(claimStart).Round(time.Millisecond))
-
-	if d.opts.Overlay {
-		if req.SnapshotID != "" {
-			restoreStart := time.Now()
+	uid := claim.Annotations[podUIDAnnotation]
+	reused := uid != ""
+	if reused && uid != string(pod.UID) {
+		return engine.TurnResponse{}, fmt.Errorf("sandbox %s was replaced (pod %s restarted) before its first turn; destroy it and create again", req.SandboxName, pod.Name)
+	}
+	if reused {
+		req.Logf("sandbox %s reused (pod %s)", req.SandboxName, pod.Name)
+	} else {
+		req.Logf("sandbox %s claimed from pool %s in %s (pod %s)", req.SandboxName, pool, time.Since(claimStart).Round(time.Millisecond), pod.Name)
+		restoreStart := time.Now()
+		switch {
+		case d.opts.Overlay && req.SnapshotID != "":
 			if err := d.csiPost(ctx, pod, "restore", req.SnapshotID); err != nil {
 				return engine.TurnResponse{}, err
 			}
-			phase("restore", restoreStart)
-			req.Logf("snapshot %s restored into %s in %s", req.SnapshotID, pod, time.Since(restoreStart).Round(time.Millisecond))
-		}
-	} else {
-		if _, err := d.mustExec(ctx, pod, []string{"mkdir", "-p", engine.Workspace}, nil); err != nil {
-			return engine.TurnResponse{}, err
-		}
-		if req.SnapshotTar != nil {
-			if _, err := d.mustExec(ctx, pod, []string{"tar", "-xzf", "-", "-C", engine.Workspace}, req.SnapshotTar); err != nil {
-				return engine.TurnResponse{}, fmt.Errorf("restore snapshot: %w", err)
+		case !d.opts.Overlay:
+			if _, err := d.mustExec(ctx, pod.Name, []string{"mkdir", "-p", engine.Workspace}, nil); err != nil {
+				return engine.TurnResponse{}, err
 			}
-			req.Logf("workspace restored from snapshot tar")
+			if req.SnapshotTar != nil {
+				if _, err := d.mustExec(ctx, pod.Name, []string{"tar", "-xzf", "-", "-C", engine.Workspace}, req.SnapshotTar); err != nil {
+					return engine.TurnResponse{}, fmt.Errorf("restore snapshot: %w", err)
+				}
+			}
+		}
+		if req.SnapshotID != "" {
+			phase("restore", restoreStart)
+			req.Logf("snapshot %s restored into %s in %s", req.SnapshotID, pod.Name, time.Since(restoreStart).Round(time.Millisecond))
 		}
 	}
+	if err := d.patchClaim(ctx, req.SandboxName, map[string]any{
+		"metadata": map[string]any{"annotations": map[string]string{podUIDAnnotation: string(pod.UID)}},
+		"spec":     map[string]any{"lifecycle": map[string]any{"shutdownTime": d.shutdownTime()}},
+	}); err != nil {
+		return engine.TurnResponse{}, fmt.Errorf("record sandbox pod: %w", err)
+	}
+	out, _ := json.Marshal(map[string]bool{"created": true, "reused": reused})
+	return engine.TurnResponse{Output: out, Timings: timings}, nil
+}
 
+func (d *Driver) destroy(ctx context.Context, req engine.TurnRequest) (engine.TurnResponse, error) {
+	claim := &extensionsv1beta1.SandboxClaim{ObjectMeta: metav1.ObjectMeta{Name: req.SandboxName, Namespace: d.opts.Namespace}}
+	if err := d.client.Delete(ctx, claim); err != nil && !apierrors.IsNotFound(err) {
+		return engine.TurnResponse{}, fmt.Errorf("delete sandbox claim %s: %w", req.SandboxName, err)
+	}
+	d.sessionMu.Lock()
+	delete(d.sessions, req.SandboxName)
+	d.sessionMu.Unlock()
+	req.Logf("sandbox %s destroyed", req.SandboxName)
+	return engine.TurnResponse{Output: json.RawMessage(`{"destroyed":true}`)}, nil
+}
+
+func (d *Driver) run(ctx context.Context, req engine.TurnRequest) (engine.TurnResponse, error) {
+	timings, phase := newTimings()
+	pod, err := d.resolveSession(ctx, req.SandboxName)
+	if err != nil {
+		return engine.TurnResponse{}, err
+	}
 	execStart := time.Now()
 	var output any
 	switch req.Fn {
@@ -675,7 +810,7 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 			return engine.TurnResponse{}, err
 		}
 		script := fmt.Sprintf("cd %s && { %s\n}; printf '__BRICKIE_EXIT__%%s' $?", engine.Workspace, in.Cmd)
-		res, err := d.exec(ctx, pod, []string{"sh", "-c", script}, nil)
+		res, err := d.exec(ctx, pod.Name, []string{"sh", "-c", script}, nil)
 		if err != nil {
 			return engine.TurnResponse{}, err
 		}
@@ -691,7 +826,12 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		if err := json.Unmarshal(req.Input, &in); err != nil {
 			return engine.TurnResponse{}, err
 		}
-		res, err := d.exec(ctx, pod, engine.PromptCommand(engine.Workspace, in.Prompt), nil)
+		transcript := engine.Workspace + "/" + engine.ConversationFile
+		var history []engine.ConversationTurn
+		if prev, err := d.exec(ctx, pod.Name, []string{"cat", transcript}, nil); err == nil && prev.ExitCode == 0 {
+			history = engine.ParseConversation(prev.Stdout)
+		}
+		res, err := d.exec(ctx, pod.Name, engine.PromptCommand(engine.Workspace, in.Prompt, history), nil)
 		if err != nil {
 			return engine.TurnResponse{}, err
 		}
@@ -701,36 +841,17 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		if apiMs := engine.ParsePromptAPIMs(string(res.Stdout)); apiMs > 0 {
 			timings["llm"] = apiMs
 		}
-		ls, err := d.mustExec(ctx, pod, []string{"ls", "-1", engine.Workspace}, nil)
+		reply := engine.ParsePromptReply(string(res.Stdout))
+		if _, err := d.mustExec(ctx, pod.Name, []string{"sh", "-c", "cat > " + transcript}, engine.AppendTurn(history, in.Prompt, reply)); err != nil {
+			req.Logf("conversation append failed: %v", err)
+		}
+		ls, err := d.mustExec(ctx, pod.Name, []string{"ls", "-1", engine.Workspace}, nil)
 		if err != nil {
 			return engine.TurnResponse{}, err
 		}
-		output = engine.PromptOutput{Reply: engine.ParsePromptReply(string(res.Stdout)), Files: engine.FilterFiles(strings.Split(strings.TrimSpace(string(ls.Stdout)), "\n"))}
+		output = engine.PromptOutput{Reply: reply, Files: engine.FilterFiles(strings.Split(strings.TrimSpace(string(ls.Stdout)), "\n"))}
 	default:
-		if req.FnSource == "" {
-			return engine.TurnResponse{}, fmt.Errorf("unknown sandbox fn %q and no fnSource provided", req.Fn)
-		}
-		ctrl := engine.Workspace + "/.brickie"
-		if _, err := d.mustExec(ctx, pod, []string{"mkdir", "-p", ctrl}, nil); err != nil {
-			return engine.TurnResponse{}, err
-		}
-		if _, err := d.mustExec(ctx, pod, []string{"sh", "-c", "cat > " + ctrl + "/runner.cjs"}, []byte(engine.RunnerJS)); err != nil {
-			return engine.TurnResponse{}, err
-		}
-		if _, err := d.mustExec(ctx, pod, []string{"sh", "-c", "cat > " + ctrl + "/input.json"}, engine.RunnerInput(req.FnSource, req.Input)); err != nil {
-			return engine.TurnResponse{}, err
-		}
-		if _, err := d.mustExec(ctx, pod, []string{"node", ctrl + "/runner.cjs"}, nil); err != nil {
-			return engine.TurnResponse{}, err
-		}
-		res, err := d.mustExec(ctx, pod, []string{"cat", ctrl + "/output.json"}, nil)
-		if err != nil {
-			return engine.TurnResponse{}, err
-		}
-		output = json.RawMessage(res.Stdout)
-		if _, err := d.mustExec(ctx, pod, []string{"rm", "-rf", ctrl}, nil); err != nil {
-			return engine.TurnResponse{}, err
-		}
+		return engine.TurnResponse{}, fmt.Errorf("unknown sandbox fn %q", req.Fn)
 	}
 
 	phase("exec", execStart)
@@ -739,9 +860,9 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	if err != nil {
 		return engine.TurnResponse{}, err
 	}
+	checkpointStart := time.Now()
 	if d.opts.Overlay {
-		checkpointStart := time.Now()
-		if _, err := d.exec(ctx, pod, []string{"sh", "-c", "sync"}, nil); err != nil {
+		if _, err := d.exec(ctx, pod.Name, []string{"sh", "-c", "sync"}, nil); err != nil {
 			req.Logf("pre-checkpoint sync failed: %v", err)
 		}
 		if err := d.csiPost(ctx, pod, "checkpoint", req.CheckpointID); err != nil {
@@ -752,8 +873,7 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		req.Logf("overlay checkpoint %s complete", req.CheckpointID)
 		return engine.TurnResponse{Output: outJSON, Timings: timings}, nil
 	}
-	checkpointStart := time.Now()
-	tar, err := d.mustExec(ctx, pod, []string{"tar", "-czf", "-", "-C", engine.Workspace, "."}, nil)
+	tar, err := d.mustExec(ctx, pod.Name, []string{"tar", "-czf", "-", "-C", engine.Workspace, "."}, nil)
 	if err != nil {
 		return engine.TurnResponse{}, fmt.Errorf("snapshot workspace: %w", err)
 	}
@@ -768,22 +888,18 @@ func (d *Driver) SnapshotNative() bool {
 // csiPost asks the CSI node daemon on the sandbox pod's node to checkpoint or
 // restore the pod's live workspace. The workspace is keyed by pod name via
 // the CSI driver's podInfoOnMount.
-func (d *Driver) csiPost(ctx context.Context, pod, op, snapshotID string) error {
-	p, err := d.clientset.CoreV1().Pods(d.opts.Namespace).Get(ctx, pod, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("resolve sandbox pod node: %w", err)
-	}
+func (d *Driver) csiPost(ctx context.Context, pod *corev1.Pod, op, snapshotID string) error {
 	nodes, err := d.clientset.CoreV1().Pods(d.opts.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: csiNodeLabel,
-		FieldSelector: "spec.nodeName=" + p.Spec.NodeName,
+		FieldSelector: "spec.nodeName=" + pod.Spec.NodeName,
 	})
 	if err != nil {
-		return fmt.Errorf("find csi node pod on %s: %w", p.Spec.NodeName, err)
+		return fmt.Errorf("find csi node pod on %s: %w", pod.Spec.NodeName, err)
 	}
 	if len(nodes.Items) == 0 || nodes.Items[0].Status.PodIP == "" {
-		return fmt.Errorf("no running brickie csi node pod on node %s (is csi.enabled set?)", p.Spec.NodeName)
+		return fmt.Errorf("no running brickie csi node pod on node %s (is csi.enabled set?)", pod.Spec.NodeName)
 	}
-	body, _ := json.Marshal(map[string]string{"sandboxId": pod, "snapshotId": snapshotID})
+	body, _ := json.Marshal(map[string]string{"sandboxId": pod.Name, "snapshotId": snapshotID})
 	url := fmt.Sprintf("http://%s:%d/v1/%s", nodes.Items[0].Status.PodIP, d.opts.CSIPort, op)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -791,12 +907,12 @@ func (d *Driver) csiPost(ctx context.Context, pod, op, snapshotID string) error 
 	}
 	res, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("%s %s: %w", op, pod, err)
+		return fmt.Errorf("%s %s: %w", op, pod.Name, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		detail, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-		return fmt.Errorf("%s %s failed (%d): %s", op, pod, res.StatusCode, detail)
+		return fmt.Errorf("%s %s failed (%d): %s", op, pod.Name, res.StatusCode, detail)
 	}
 	return nil
 }

@@ -1,3 +1,4 @@
+// Package awsboot provisions EKS clusters and installs brickie on them.
 package awsboot
 
 import (

@@ -7,7 +7,10 @@ import (
 	"time"
 
 	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
+	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/registry"
 	helmdriver "helm.sh/helm/v3/pkg/storage/driver"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/discovery"
@@ -51,6 +54,11 @@ func helmConfig(cfg *rest.Config, namespace string) (*action.Configuration, erro
 	if err := actionCfg.Init(&restClientGetter{cfg: cfg}, namespace, "secret", func(string, ...any) {}); err != nil {
 		return nil, fmt.Errorf("init helm: %w", err)
 	}
+	rc, err := registry.NewClient()
+	if err != nil {
+		return nil, fmt.Errorf("init helm registry client: %w", err)
+	}
+	actionCfg.RegistryClient = rc
 	return actionCfg, nil
 }
 
@@ -71,14 +79,29 @@ func ReleaseExists(cfg *rest.Config, namespace, release string) (bool, error) {
 	return true, nil
 }
 
-func InstallChart(ctx context.Context, cfg *rest.Config, namespace, release, chartPath string, values map[string]any) error {
+func loadChart(actionCfg *action.Configuration, chartRef, version string) (*chart.Chart, error) {
+	if !registry.IsOCI(chartRef) {
+		return loader.Load(chartRef)
+	}
+	cpo := action.NewInstall(actionCfg).ChartPathOptions
+	cpo.Version = version
+	path, err := cpo.LocateChart(chartRef, cli.New())
+	if err != nil {
+		return nil, fmt.Errorf("pull chart %s: %w", chartRef, err)
+	}
+	return loader.Load(path)
+}
+
+// InstallChart installs or upgrades a release from a local chart path or an
+// oci:// reference (version applies to oci:// only).
+func InstallChart(ctx context.Context, cfg *rest.Config, namespace, release, chartRef, version string, values map[string]any) error {
 	actionCfg, err := helmConfig(cfg, namespace)
 	if err != nil {
 		return err
 	}
-	chart, err := loader.Load(chartPath)
+	chart, err := loadChart(actionCfg, chartRef, version)
 	if err != nil {
-		return fmt.Errorf("load chart %s: %w", chartPath, err)
+		return fmt.Errorf("load chart %s: %w", chartRef, err)
 	}
 	exists, err := ReleaseExists(cfg, namespace, release)
 	if err != nil {

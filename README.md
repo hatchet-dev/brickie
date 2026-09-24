@@ -1,113 +1,145 @@
 # brickie
 
-Universal sandbox API and session manager. Deploys into your own cloud account.
+brickie runs agent sandboxes as Hatchet tasks.
 
-brickie runs agent sandboxes as Hatchet durable tasks. Each sandbox turn is one task. When a turn finishes, the workspace is saved as a snapshot. Later turns can resume from a snapshot or fork it.
+A sandbox is one micro-VM. On a laptop it is a Docker Sandboxes micro-VM. On Kubernetes it is one pod under gVisor or Kata Containers. A Hatchet durable task creates the sandbox and is the agent session. Each agent turn runs in the sandbox as a Hatchet task. Each turn makes a snapshot of the workspace. A snapshot does not change. Any snapshot can start a new sandbox. A session can continue or fork from any turn. The files and the conversation are in the snapshot.
 
-The SDKs only trigger turns. The `brickie` engine (Go) executes them, either locally in Docker Sandboxes or in Kubernetes using [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox).
+The TypeScript SDK only triggers turns. The `brickie` provider (Go) runs them, in Docker Sandboxes or in Kubernetes with [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox).
 
 ## Repository layout
 
 | Path | Contents |
 | --- | --- |
-| `cmd/brickie/` | CLI. `dev` sets up local sandboxes on this machine. Hidden commands: `worker` (the sandbox provider), `bootstrap-kind`, `bootstrap-aws`. |
-| `internal/engine/` | Durable task definition, snapshot store, turn contract, node runner. |
-| `internal/driver/local/` | Docker Sandboxes driver. Uses the `sbx` CLI. Docker does not publish a Go client. |
-| `internal/driver/kubernetes/` | Kubernetes driver. Creates agent-sandbox `Sandbox` resources with the official v1beta1 types and runs commands with pod exec. |
-| `sdks/typescript`, `sdks/python`, `sdks/go` | Client SDKs. |
-| `examples/typescript`, `examples/python`, `examples/go` | Runnable sessions. |
+| `cmd/brickie/` | CLI. `dev` sets up local sandboxes. Hidden commands: `worker` (the provider), `csi-node`, `injector`, `bootstrap-kind`, `bootstrap-aws`. |
+| `internal/engine/` | Turn contract, provider task, snapshot store, transcript. |
+| `internal/driver/local/` | Docker Sandboxes driver. Uses the `sbx` CLI. |
+| `internal/driver/kubernetes/` | Kubernetes driver. One agent-sandbox `SandboxClaim` per session, pod exec for turns. |
+| `internal/overlay/`, `internal/csi/` | overlayfs workspaces and the CSI node plugin that mounts them. |
+| `internal/awsboot/` | EKS bootstrap: cluster, nodes, ECR, S3, gVisor and Kata installers. |
+| `sdks/typescript/` | The SDK. `examples/typescript/` has the demo. |
 | `helm/brickie/` | Helm chart for the provider. Includes the agent-sandbox chart as a subchart. |
 
 ## Requirements
 
-- Go 1.26 or newer to build the engine
-- Docker Desktop (local sandboxes are macOS-only today; Docker Sandboxes ships with Docker Desktop on macOS)
-- For local sandboxes: Homebrew (installs the `sbx` CLI)
-- For Kubernetes: `kind`, `kubectl`, `helm`
-- Node and pnpm for the TypeScript SDK and examples
+- Docker Desktop on macOS. Docker Sandboxes is part of Docker Desktop.
+- Node and pnpm.
+- Homebrew. The setup script uses Homebrew to install the `sbx` CLI.
+- For Kubernetes: `kind`, `kubectl`, `helm`. For AWS: Docker and AWS credentials.
 
-## Try it locally
-
-Everything runs on your machine: sandboxes in Docker Sandboxes micro-VMs, orchestration in an embedded Hatchet engine. The only external traffic is Claude API calls.
+## Run the demo
 
 ```bash
-go build -o /usr/local/bin/brickie ./cmd/brickie
-brickie dev
-pnpm install                       # repo root — the examples use the workspace SDK
-cd examples/typescript && pnpm demo
+hack/run-demo.sh
 ```
 
-`brickie dev` checks Docker Desktop, installs and signs in the `sbx` CLI, initializes the sandbox network policy, and authenticates Claude inside sandboxes. Every step is skipped once it holds, so re-running it is free; sign-in steps open a browser only the first time (`--claude-auth` forces Claude re-auth after a credential change). It ends with a summary of what runs where.
+The script does the setup step by step. Before each step, it shows the command and asks for approval. It installs and configures Docker Sandboxes, starts Hatchet with Docker Compose, makes a token in `.env`, builds the provider in a Go container, starts the provider, and starts the demo. The script is safe to run again. It skips the steps that are complete.
 
-`pnpm demo` is an interactive session shell: each message you type runs as one durable `agent-turn` task in a fresh sandbox, plain text goes to Claude, `!command` runs a shell command, and every turn prints its snapshot id and a latency breakdown. `/restore <id>` forks a new sandbox from any earlier snapshot. The other examples (`pnpm command`, `pnpm prompt`, `pnpm harness`) are non-interactive end-to-end runs that finish with `e2e ok`.
+The demo is one durable task with the name `agent-session`. The task creates a sandbox. The sandbox stays alive for the full session. Each message runs as one turn in that sandbox:
 
-How placement works: when `HATCHET_CLIENT_TOKEN` is not set, the SDK starts an embedded Hatchet engine (downloaded once and cached in `~/.hatchet`, with a bundled Postgres — the first run takes a minute) and spawns `brickie worker --driver local` as a sidecar. If the `brickie` binary is not on `PATH`, set `BRICKIE_BIN` to its location. When `HATCHET_CLIENT_TOKEN` is set, the SDK starts nothing and turns are orchestrated by that Hatchet instance instead — sandboxes still run wherever a provider is running. If your shell has `HATCHET_CLIENT_TLS_ROOT_CA_FILE` set, unset it before targeting a hosted instance.
+- Type text to send a prompt to Claude. Claude keeps the conversation between turns.
+- Type `!` and a command to run a shell command.
+- Type `/restore` and a snapshot ID to start a new sandbox from that snapshot.
+- Type `/exit` to end the session.
 
-Local security model:
+After each turn, the demo shows the snapshot ID and the time for each step. Open [http://localhost:8888](http://localhost:8888) to see the session in the Hatchet dashboard. Log in with `admin@example.com` and `Admin123!!`. The demo code is in `examples/typescript/demo.ts`.
 
-- Sandboxes are Docker Sandboxes micro-VMs. The per-turn workspace directory is the only path shared with the host.
-- No environment variables from your machine are injected into local sandboxes (`--credentials` applies to the Kubernetes driver only). Claude authenticates via the credential stored inside the sandbox agent kit by `brickie dev`.
-- Snapshots are tars of the workspace under `~/.brickie/snapshots`, pruned after 7 days.
-- In local mode, `image` selects an sbx template (built from the Docker Sandboxes base image), not an arbitrary container image; on Kubernetes it is a container image. Omit it locally to use the default Claude template.
+## TypeScript SDK
+
+```ts
+import '@hatchet/sandbox';
+
+const session = hatchet.durableTask({
+  name: 'agent-session',
+  executionTimeout: '1h',
+  fn: async (input, ctx) => {
+    const sandbox = await hatchet.sandbox.create(ctx);
+    await sandbox.prompt('create haiku.txt with a haiku');
+    const haiku = await sandbox.exec('cat haiku.txt');
+
+    const fork = await hatchet.sandbox.create(ctx, { from: haiku.snapshotId });
+    await fork.prompt('make it darker');
+
+    await sandbox.kill();
+    await fork.kill();
+    return { haiku: haiku.stdout };
+  },
+});
+```
+
+### Create a sandbox
+
+- `hatchet.sandbox.create(ctx, options)` starts a micro-VM. This is the cold start.
+- `options.template` selects the image. On a laptop it is a Docker Sandboxes template. The default is `claude`. On Kubernetes it is a container image. The default is the provider's `--image`.
+- `options.from` starts the sandbox from a snapshot. Two sandboxes with the same `from` are a fork.
+
+### Use the sandbox
+
+- `sandbox.exec(cmd)` runs a shell command. It returns `{ stdout, stderr, exitCode }`. A non-zero exit code does not cause an error.
+- `sandbox.prompt(text)` runs one Claude turn. It returns `{ reply, files }`. Claude keeps the conversation between turns.
+- `sandbox.kill()` removes the sandbox. The provider also removes a sandbox after 30 minutes without a turn. Set `--sandbox-idle-ttl` on the provider to change this time.
+
+Each call is one Hatchet task. Each result also has `snapshotId` and `timings`. A turn on a sandbox that was removed, or on a pod that Kubernetes restarted, fails with a clear error. Create a new sandbox from the last snapshot to continue.
+
+### Connect to Hatchet
+
+Set `HATCHET_CLIENT_TOKEN` to use a Hatchet instance. The provider registered in that tenant runs the turns.
+
+Without `HATCHET_CLIENT_TOKEN`, the example starts an embedded Hatchet engine and the provider. This needs the `brickie` binary on `PATH`, or `BRICKIE_BIN` set to its location.
+
+## Use an external Hatchet instance
+
+The Hatchet in Docker Compose is the default. To use Hatchet Cloud or a self-hosted instance:
+
+1. Get a token from the tenant.
+2. Put the token in `.env` as `HATCHET_CLIENT_TOKEN`. Replace the token from the script.
+3. Remove the line `HATCHET_CLIENT_TLS_STRATEGY=none`. This line is only for the local Hatchet.
+4. Run `hack/run-demo.sh` again.
+
+If the shell has `HATCHET_CLIENT_TLS_ROOT_CA_FILE` set, unset it before a hosted instance is used.
 
 ## Kubernetes mode
 
-Kubernetes mode uses Hatchet Cloud for orchestration and a kind cluster for sandboxes.
-
 ```bash
-export HATCHET_CLIENT_TOKEN=<token from your tenant>
+export HATCHET_CLIENT_TOKEN=<token from the tenant>
 export ANTHROPIC_API_KEY=<key>   # or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`
 brickie bootstrap-kind -n brickie
-cd examples/typescript && pnpm k8s
+cd examples/typescript && pnpm demo
 ```
 
-`bootstrap-kind` creates the kind cluster, builds the provider image from the root `Dockerfile`, loads it into the cluster, and installs the Helm chart. If agent-sandbox is already installed on the cluster, the subchart is skipped.
+`bootstrap-kind` creates the kind cluster, builds the provider image, loads it, and installs the chart. The provider keeps a warm pool of pods per image. `hatchet.sandbox.create` claims one pod and keeps it for the session. Every turn runs in that pod and checkpoints the workspace. `sandbox.kill` or the idle time releases the pod. The default sandbox image is `alpine:3`. Use `--image` (`BRICKIE_SANDBOX_IMAGE`) to change it.
 
-When `HATCHET_CLIENT_TOKEN` is set, the SDK does not start anything. It triggers `brickie-sandbox` tasks and the provider registered in the tenant runs them. The provider claims a pod from a per-image warm pool for each turn, restores the snapshot into it when the turn continues from one, runs the turn, checkpoints the workspace, and releases the pod. The default sandbox image is `alpine:3`. Use `--image` (`BRICKIE_SANDBOX_IMAGE`) to change it.
-
-If you develop hatchet locally with mkcert, run `unset HATCHET_CLIENT_TLS_ROOT_CA_FILE` before connecting to Hatchet Cloud. Otherwise the gRPC connection fails with a TLS error.
-
-## Claude Managed Agents
-
-Claude Managed Agents run the agent loop on Anthropic's orchestration layer. With a self-hosted environment, tool execution moves to infrastructure you control: a worker polls Anthropic's work queue and runs bash and file tools locally. brickie is that infrastructure. Each managed agent run executes inside a brickie sandbox as one durable Hatchet turn, so the agent's workspace lives in your cluster, is snapshotted after every run, and can be resumed or forked like any other brickie session.
-
-Setup:
-
-1. Create a self-hosted environment: `ant beta:environments create <<< '{"name":"brickie-byoc","config":{"type":"self_hosted"}}'`
-2. Generate an environment key for it in the Claude Console, on the environment page.
-3. Export `ANTHROPIC_ENVIRONMENT_ID`, `ANTHROPIC_ENVIRONMENT_KEY`, and `ANTHROPIC_API_KEY`.
-4. Run the brickie provider with the environment credentials injected into sandboxes: `--credentials ANTHROPIC_ENVIRONMENT_KEY,ANTHROPIC_ENVIRONMENT_ID`, or `sandbox.credentials` in the Helm chart.
-
-```bash
-cd examples/typescript && pnpm managed-agent
-```
-
-The example creates a managed agent once (reuse it with `BRICKIE_MANAGED_AGENT_ID`), starts a session, and drives two turns. For each turn it sends a user message, then runs a `managed-agent-turn` durable task whose sandbox function drains the environment work queue and services the run with the workspace as the tool working directory. The second turn restores the first turn's snapshot, so the agent sees the files it wrote earlier. Give the example a dedicated environment: a turn services whatever work is queued on the environment, so sessions from elsewhere would be picked up too.
+Run one provider replica. Turns on the same sandbox are serialized in the provider process.
 
 ## AWS mode
 
-`brickie bootstrap-aws` takes you from AWS credentials to a running brickie install on EKS. It talks to AWS through the SDK and installs the chart through the Helm SDK, so the only tool it needs is Docker, for building and pushing the provider image. No eksctl, kubectl, or helm binaries are required. Run it interactively and it asks for the region, whether to create a new cluster or reuse an existing one, and the node shape. Every question also has a flag, so CI can run it non-interactively:
+`brickie bootstrap-aws` goes from AWS credentials to a running install on EKS. It uses the AWS SDK and the Helm SDK. The only tool it needs is Docker, to build and push the provider image. Run it with no flags for a guided setup. Each question also has a flag:
 
 ```bash
 export HATCHET_CLIENT_TOKEN=<token>
-brickie bootstrap-aws                      # interactive
+brickie bootstrap-aws
 brickie bootstrap-aws --region us-east-1 --cluster-name brickie --node-count 2
+brickie bootstrap-aws --region us-east-1 --cluster-name brickie --runtime kata --instance-type m5.metal
 brickie bootstrap-aws --region us-east-1 --existing-cluster my-cluster
 ```
 
-The create path provisions IAM roles, an EKS cluster in the default VPC, a managed nodegroup, an ECR repository, and an S3 snapshot bucket, then builds and pushes the provider image and installs the chart with overlayfs and S3 snapshots enabled. The existing path skips cluster creation and grants your IAM principal cluster admin through an EKS access entry when needed. Both paths update your kubeconfig with an `aws eks get-token` entry.
+The create path makes IAM roles, an EKS cluster in the default VPC, a managed nodegroup, an ECR repository, and an S3 snapshot bucket. Then it builds and pushes the provider image and installs the chart with overlayfs snapshots and S3 offload. The existing path skips cluster creation and gives the IAM principal cluster admin through an EKS access entry when needed. Both paths update the kubeconfig.
 
-## gVisor
+## Runtimes
 
-bootstrap-aws installs gVisor (runsc) on every node through a DaemonSet and creates a `gvisor` RuntimeClass. The provider detects that runtime class at startup and runs every sandbox pod under gVisor, so agent code is isolated from the host kernel. Detection is controlled by `gvisor.mode` in the chart (`BRICKIE_GVISOR`, `--gvisor`):
+Sandbox pods run under a runtime class that isolates agent code from the host kernel. Two runtimes are supported:
 
-- `auto` (default): use gVisor when the `gvisor` runtime class exists, otherwise warn and use the default runtime. kind and other clusters without gVisor keep working unchanged.
-- `on`: fail at startup if the runtime class is missing.
-- `off`: never use gVisor.
+- `gvisor`: gVisor (runsc). Works on any EC2 instance type. `bootstrap-aws` installs it with a DaemonSet and creates the `gvisor` runtime class.
+- `kata`: Kata Containers with Cloud Hypervisor. Each pod is a real VM. This needs KVM, so the nodes must be bare-metal x86 instances (`m5.metal`, `c5.metal`, `m6i.metal`, `c6i.metal`). `bootstrap-aws --runtime kata` installs kata-deploy 4.2.0 with the Helm SDK and uses the `kata-clh` runtime class. `bootstrap-aws` rejects other instance types.
 
-In `auto` mode, a pod that lands on a node without runsc (for example a fresh node the installer has not reached yet) is recreated once with the default runtime, and the downgrade is logged on the turn. Every turn logs which runtime it ran under. Overlayfs snapshots work unchanged under gVisor: layer assembly and checkpoints happen on the host, and the driver runs `sync` inside the sandbox before each checkpoint so buffered writes reach the workspace first.
+The provider selects the runtime at startup with `sandbox.runtime` in the chart (`BRICKIE_RUNTIME`, `--runtime`):
 
-To verify a sandbox is running under gVisor, run a command turn with `dmesg | head`. gVisor prints its own boot lines instead of the host kernel's.
+- `auto` (default): `kata-clh` when that runtime class exists, else `gvisor`, else the default runtime with a warning. kind keeps working unchanged.
+- `gvisor` or `kata`: fail at startup when the runtime class is missing.
+- `none`: never set a runtime class.
+
+Snapshots work the same under both runtimes. The overlay chain lives on the host. The driver runs `sync` inside the sandbox before each checkpoint so buffered writes reach the workspace. Under Kata the workspace is shared into the VM with virtiofs in its default `cache=auto` mode. `cache=always` is not supported. To see the runtime, run `!uname -r` in a turn. gVisor reports `4.19.0-gvisor`. Kata reports the guest kernel.
+
+To install a runtime on an existing cluster without `bootstrap-aws`, run `go run ./hack/apply-runtime --runtime gvisor|kata` with the kubeconfig context set.
 
 ## Worker options
 
@@ -121,82 +153,23 @@ To verify a sandbox is running under gVisor, run a command turn with `dmesg | he
 | `--credentials` | `BRICKIE_CREDENTIALS` | none |
 | `--snapshot-dir` | `BRICKIE_SNAPSHOT_DIR` | `~/.brickie/snapshots` |
 | `--turn-timeout` | `BRICKIE_TURN_TIMEOUT` | `15m` |
+| `--sandbox-idle-ttl` | `BRICKIE_SANDBOX_IDLE_TTL` | `30m` (must exceed the turn timeout) |
 | `--context` | `BRICKIE_KUBE_CONTEXT` | current context or in-cluster |
 | `--slots` | `BRICKIE_SLOTS` | `10` |
 | `--object-store` | `BRICKIE_OBJECT_STORE` | none |
 | `--overlay` | `BRICKIE_OVERLAY` | `false` |
-| `--gvisor` | `BRICKIE_GVISOR` | `auto` |
+| `--runtime` | `BRICKIE_RUNTIME` | `auto` |
 | `--injector`, `--injector-secret`, `--injector-image` | `BRICKIE_INJECTOR*` | disabled |
 | `--warm-images`, `--warm-replicas` | `BRICKIE_WARM_IMAGES`, `BRICKIE_WARM_REPLICAS` | none, `2` |
 
-`--credentials` is a comma-separated list of environment variable names. The Kubernetes driver copies those variables from the worker process into each sandbox pod (sealed by the injector when it is enabled). The local driver ignores it: local sandboxes receive no host environment variables by design.
-
-## Other SDKs
-
-Python:
-
-```bash
-pip install -e sdks/python
-cd examples/python && python command.py
-```
-
-Go:
-
-```bash
-cd examples/go/command && go run .
-```
-
-The Go SDK starts the local sidecar with the environment of the current process. In embedded local mode, run `brickie worker --driver local` yourself with the matching `HATCHET_CLIENT_*` variables.
-
-## API
-
-TypeScript:
-
-```ts
-import { sandbox } from '@hatchet/sandbox';
-
-const sbx = sandbox(hatchet);
-
-const session = hatchet.durableTask({
-  name: 'agent-session',
-  executionTimeout: '1h',
-  fn: async (input, ctx) => {
-    const t1 = await sbx.executePrompt(ctx, 'create haiku.txt with a haiku');
-    const t2 = await sbx.executeCommand(ctx, 'cat haiku.txt', { from: t1.snapshotId });
-    const [a, b] = await sbx.executeAll(ctx, [
-      { prompt: 'make it darker', from: t2.snapshotId },
-      { prompt: 'make it funnier', from: t2.snapshotId },
-    ]);
-    return { a, b };
-  },
-});
-```
-
-Methods:
-
-- `executeCommand(ctx, cmd, opts?)` runs a shell command in the workspace. Returns `{ stdout, stderr, exitCode }`. A non-zero exit code does not fail the turn.
-- `executePrompt(ctx, prompt, opts?)` runs one Claude turn in the workspace. Returns `{ reply, files }`.
-- `createFunction(name, fn)` registers a JavaScript function that runs inside the sandbox. Call it with `.run(ctx, input, opts?)`. The sandbox image must include node. TypeScript only.
-- `executeAll(ctx, items)` runs several turns in parallel as one durable step.
-
-Every method returns `{ output, snapshotId }`. Pass `{ from: snapshotId }` to start from a snapshot. Passing the same `from` to two calls forks that snapshot. Omit it to start from an empty workspace.
-
-The Python SDK exposes `Sandbox` with `execute_command`, `execute_prompt`, and `execute_all`. The Go SDK exposes `sandbox.New` with `ExecuteCommand`, `ExecutePrompt`, and `ExecuteAll`.
-
-Turn timeouts and default images are provider settings, not SDK settings. Set them on `brickie worker` or in the Helm chart values.
-
-## Observability
-
-Every turn streams logs and traces to Hatchet Cloud, visible on the run in the dashboard.
-
-- The provider logs each phase of a turn: image resolution, snapshot restore with size, pod or sbx sandbox lifecycle, ready wait duration, execution time, and checkpoint. When a sandbox pod never becomes ready, the error includes the pod phase, container states, and scheduling conditions.
-- The worker registers Hatchet's OpenTelemetry instrumentor, so every task run produces spans sent to Hatchet's OTLP collector. Connection settings come from the same `HATCHET_CLIENT_*` variables the worker already uses.
-- The TypeScript SDK registers the instrumentor on the client side too, so triggering spans link to worker spans through traceparent propagation, and third-party backend turns log the backend session lifecycle. Every spawned turn carries `brickie.fn`, `brickie.image`, and `brickie.from` as run metadata for filtering in the dashboard.
-
-Set `BRICKIE_OTEL=false` to disable tracing on either side. Log lines always flow.
+`--credentials` is a comma-separated list of environment variable names. The Kubernetes driver copies those variables from the provider process into each sandbox pod (sealed by the injector when it is enabled). The local driver ignores it. Local sandboxes get no host environment variables.
 
 ## Snapshots
 
-A snapshot is a gzipped tar of the workspace, stored by the provider under `--snapshot-dir` and named after the run id of the turn that produced it. Snapshots are immutable. Retried turns overwrite their own snapshot, so replays are safe. Local snapshots older than 7 days are pruned when the provider starts.
+On a laptop and on Kubernetes without the CSI driver, a snapshot is a gzipped tar of the workspace. The provider stores it under `--snapshot-dir` with the run ID of the turn as the name. Local snapshots older than 7 days are pruned when the provider starts. With `--object-store` (`s3://`, `gs://`, `azblob://`), snapshots go to object storage with the local directory as a cache.
 
-With `--object-store` (`s3://`, `gs://`, `azblob://`), snapshots are offloaded to object storage with the local directory acting as a cache, and multiple provider replicas can share them. On Kubernetes with the CSI driver enabled, snapshots are overlayfs layers checkpointed on the node instead of tars.
+On Kubernetes with the CSI driver (`csi.enabled`), a snapshot is an overlayfs layer checkpointed on the node. Each turn on a live sandbox tars the sandbox's upper directory, so the cost of a checkpoint grows with the changes made in the session. A `from` snapshot from another node needs `csi.objectStore`. Set it on every cluster with more than one node.
+
+## Observability
+
+Every turn streams logs and traces to Hatchet, visible on the run in the dashboard. The provider logs each phase of a turn: image resolution, claim or reuse of the sandbox, restore, execution time, and checkpoint. The worker and the SDK register Hatchet's OpenTelemetry instrumentor, so trigger spans link to worker spans. Every turn carries `brickie.sandbox`, `brickie.fn`, `brickie.image`, and `brickie.from` as run metadata. Set `BRICKIE_OTEL=false` to disable tracing.
