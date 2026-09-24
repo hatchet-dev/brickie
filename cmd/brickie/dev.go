@@ -10,8 +10,8 @@ import (
 	"runtime"
 	"strings"
 
-	charmlog "github.com/charmbracelet/log"
 	"github.com/charmbracelet/lipgloss"
+	charmlog "github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 )
 
