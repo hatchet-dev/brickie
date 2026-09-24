@@ -4,15 +4,29 @@ import '@hatchet/sandbox';
 
 const CLAUDE_IMAGE = process.env.DEMO_CLAUDE_IMAGE ?? '643285090708.dkr.ecr.us-east-2.amazonaws.com/brickie:claude-code-0.1.0';
 
+const sec = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+
+function breakdown(totalMs: number, timings: Record<string, number> = {}) {
+  const { claim = 0, restore = 0, exec = 0, checkpoint = 0, llm = 0 } = timings;
+  const parts = [`total ${sec(totalMs)}`];
+  if (claim) parts.push(`pod ${sec(claim + restore)}`);
+  if (exec) parts.push(llm ? `agent ${sec(exec - llm)} · llm ${sec(llm)}` : `run ${sec(exec)}`);
+  if (checkpoint) parts.push(`snapshot ${sec(checkpoint)}`);
+  const hatchet = totalMs - claim - restore - exec - checkpoint;
+  if (hatchet > 0 && (claim || exec)) parts.push(`hatchet ${sec(hatchet)}`);
+  return parts.join(' · ');
+}
+
 async function main() {
   process.env.HATCHET_CLIENT_LOG_LEVEL = process.env.HATCHET_CLIENT_LOG_LEVEL ?? 'ERROR';
   const hatchet = await initClient();
+
+
 
   const turn = hatchet.durableTask({
     name: 'agent-turn',
     executionTimeout: '5m',
     fn: async (input: { message: string; from?: string }, ctx) => {
-      const shell = hatchet.sandbox();
       const claude = hatchet.sandbox({ image: CLAUDE_IMAGE });
       const opts = input.from ? { from: input.from } : {};
       if (input.message.startsWith('!')) {
@@ -58,12 +72,12 @@ async function main() {
     }
     const started = Date.now();
     const result = await turn.run({ message: line, ...(snapshot ? { from: snapshot } : {}) });
-    const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+    const total = Date.now() - started;
     const out = result.output as any;
     console.log(out.reply ?? out.stdout ?? '');
     if (out.stderr) console.log(out.stderr);
     snapshot = result.snapshotId;
-    console.log(`(snapshot ${snapshot} · ${elapsed}s)\n`);
+    console.log(`(snapshot ${snapshot} · ${breakdown(total, (result as any).timings)})\n`);
   }
 
   rl.close();

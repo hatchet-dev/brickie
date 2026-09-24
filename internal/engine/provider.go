@@ -87,7 +87,7 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		req.Logf("snapshot %s stored (%d bytes)", runID, len(resp.SnapshotTar))
 	}
 	req.Logf("turn done: snapshot=%s", runID)
-	return TurnResult{Output: resp.Output, SnapshotID: runID}, nil
+	return TurnResult{Output: resp.Output, SnapshotID: runID, Timings: resp.Timings}, nil
 }
 
 func NewProviderTask(client *hatchet.Client, opts ProviderOpts) *hatchet.StandaloneTask {

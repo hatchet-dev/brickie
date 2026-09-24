@@ -621,6 +621,10 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	if image == "" {
 		image = d.opts.Image
 	}
+	timings := map[string]int64{}
+	phase := func(name string, start time.Time) {
+		timings[name] = time.Since(start).Milliseconds()
+	}
 	pool, err := d.ensurePool(ctx, image)
 	if err != nil {
 		return engine.TurnResponse{}, err
@@ -638,6 +642,7 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		req.Logf("sandbox %s not ready: %v", pod, err)
 		return engine.TurnResponse{}, err
 	}
+	phase("claim", claimStart)
 	req.Logf("sandbox %s claimed from pool %s in %s", pod, pool, time.Since(claimStart).Round(time.Millisecond))
 
 	if d.opts.Overlay {
@@ -646,6 +651,7 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 			if err := d.csiPost(ctx, pod, "restore", req.SnapshotID); err != nil {
 				return engine.TurnResponse{}, err
 			}
+			phase("restore", restoreStart)
 			req.Logf("snapshot %s restored into %s in %s", req.SnapshotID, pod, time.Since(restoreStart).Round(time.Millisecond))
 		}
 	} else {
@@ -692,6 +698,9 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		if res.ExitCode != 0 {
 			return engine.TurnResponse{}, fmt.Errorf("claude failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr+string(res.Stdout)))
 		}
+		if apiMs := engine.ParsePromptAPIMs(string(res.Stdout)); apiMs > 0 {
+			timings["llm"] = apiMs
+		}
 		ls, err := d.mustExec(ctx, pod, []string{"ls", "-1", engine.Workspace}, nil)
 		if err != nil {
 			return engine.TurnResponse{}, err
@@ -724,12 +733,14 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		}
 	}
 
+	phase("exec", execStart)
 	req.Logf("fn %s executed in %s", req.Fn, time.Since(execStart).Round(time.Millisecond))
 	outJSON, err := json.Marshal(output)
 	if err != nil {
 		return engine.TurnResponse{}, err
 	}
 	if d.opts.Overlay {
+		checkpointStart := time.Now()
 		if _, err := d.exec(ctx, pod, []string{"sh", "-c", "sync"}, nil); err != nil {
 			req.Logf("pre-checkpoint sync failed: %v", err)
 		}
@@ -737,14 +748,17 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 			req.Logf("overlay checkpoint %s failed: %v", req.CheckpointID, err)
 			return engine.TurnResponse{}, err
 		}
+		phase("checkpoint", checkpointStart)
 		req.Logf("overlay checkpoint %s complete", req.CheckpointID)
-		return engine.TurnResponse{Output: outJSON}, nil
+		return engine.TurnResponse{Output: outJSON, Timings: timings}, nil
 	}
+	checkpointStart := time.Now()
 	tar, err := d.mustExec(ctx, pod, []string{"tar", "-czf", "-", "-C", engine.Workspace, "."}, nil)
 	if err != nil {
 		return engine.TurnResponse{}, fmt.Errorf("snapshot workspace: %w", err)
 	}
-	return engine.TurnResponse{Output: outJSON, SnapshotTar: tar.Stdout}, nil
+	phase("checkpoint", checkpointStart)
+	return engine.TurnResponse{Output: outJSON, SnapshotTar: tar.Stdout, Timings: timings}, nil
 }
 
 func (d *Driver) SnapshotNative() bool {

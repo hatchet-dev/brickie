@@ -22,8 +22,9 @@ type TurnInput struct {
 }
 
 type TurnResult struct {
-	Output     json.RawMessage `json:"output"`
-	SnapshotID string          `json:"snapshotId"`
+	Output     json.RawMessage  `json:"output"`
+	SnapshotID string           `json:"snapshotId"`
+	Timings    map[string]int64 `json:"timings,omitempty"`
 }
 
 type TurnRequest struct {
@@ -47,6 +48,7 @@ func (r TurnRequest) Logf(format string, args ...any) {
 type TurnResponse struct {
 	Output      json.RawMessage
 	SnapshotTar []byte
+	Timings     map[string]int64
 }
 
 type Driver interface {

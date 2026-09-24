@@ -19,6 +19,7 @@ export interface SandboxTurnInput extends JsonObject {
 export interface TurnResult extends JsonObject {
   output: JsonObject;
   snapshotId: string;
+  timings?: Record<string, number>;
 }
 
 export type SandboxFn = (
