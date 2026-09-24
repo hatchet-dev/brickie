@@ -29,6 +29,10 @@ A turn is one durable Hatchet task named `brickie-sandbox`. The input carries th
 
 Retries are safe because the snapshot id in the input never changes and the output snapshot is keyed by run id. A retried turn starts from the same filesystem state and overwrites its own snapshot. A fork is two turns started from the same snapshot id. This makes arbitrary shell commands idempotent from the orchestrator's point of view.
 
+## Conversation continuity
+
+Prompt turns carry the conversation, not just the files: the engine keeps a rolling transcript in `.conversation.json` inside the workspace, feeds it to Claude on each turn, and appends the new exchange before the snapshot is taken. Because the transcript rides the snapshot chain, resuming a snapshot resumes the conversation and forking a snapshot forks it. The transcript is data authored by the user and the model — no credentials or harness internals enter snapshots — and it is capped so prompts stay bounded.
+
 ## Sessions
 
 A session is one long-lived durable task that loops on `waitForEvent` for user messages, spawns each turn as a child task, carries the snapshot lineage in its own replayable state, and streams turn results back to the caller. `examples/typescript/demo.ts` is the reference implementation.

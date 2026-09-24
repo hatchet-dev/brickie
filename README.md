@@ -8,7 +8,7 @@ What that buys you:
 
 - **Isolation**: agent code runs in a Docker Sandboxes micro-VM per turn, never on your machine. No host environment variables are injected; the per-turn workspace is the only shared path.
 - **Durability**: an agent session survives crashes and restarts. The event log replays the decisions; snapshots replay the filesystem.
-- **Time travel**: every turn's snapshot id is in the task output. Resume any point of any session, or fork it into parallel branches.
+- **Time travel**: every turn's snapshot id is in the task output. Resume any point of any session, or fork it into parallel branches — the conversation forks with the files, because the transcript rides the snapshot chain.
 - **One mental model**: a session is just a durable task; a turn is just a child task. Everything composes with the rest of your Hatchet workflows.
 
 ## Quickstart

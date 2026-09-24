@@ -150,7 +150,8 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		if err := json.Unmarshal(req.Input, &in); err != nil {
 			return engine.TurnResponse{}, err
 		}
-		args := append([]string{"exec", "-w", workspace, req.SandboxName}, engine.PromptCommand(workspace, in.Prompt)...)
+		history := engine.LoadConversation(workspace)
+		args := append([]string{"exec", "-w", workspace, req.SandboxName}, engine.PromptCommand(workspace, in.Prompt, history)...)
 		res, err := runSbx(ctx, args...)
 		if err != nil {
 			return engine.TurnResponse{}, err
@@ -161,7 +162,11 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		if apiMs := engine.ParsePromptAPIMs(res.Stdout); apiMs > 0 {
 			timings["llm"] = apiMs
 		}
-		output = engine.PromptOutput{Reply: engine.ParsePromptReply(res.Stdout), Files: listFiles(workspace)}
+		reply := engine.ParsePromptReply(res.Stdout)
+		if err := engine.AppendConversation(workspace, in.Prompt, reply); err != nil {
+			req.Logf("conversation append failed: %v", err)
+		}
+		output = engine.PromptOutput{Reply: reply, Files: listFiles(workspace)}
 	default:
 		if req.FnSource == "" {
 			return engine.TurnResponse{}, fmt.Errorf("unknown sandbox fn %q and no fnSource provided", req.Fn)

@@ -3,6 +3,8 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -32,11 +34,70 @@ func RunnerInput(fnSource string, input json.RawMessage) []byte {
 	return b
 }
 
-func PromptCommand(workspace string, prompt string) []string {
+// ConversationFile is the workspace-relative transcript file that rides the
+// snapshot chain, so resuming a snapshot resumes the conversation.
+const ConversationFile = ".conversation.json"
+
+const maxConversationChars = 32000
+
+// ConversationTurn is one user/assistant exchange in the transcript.
+type ConversationTurn struct {
+	User      string `json:"user"`
+	Assistant string `json:"assistant"`
+}
+
+// LoadConversation reads the transcript from a workspace, empty when absent.
+func LoadConversation(workspaceDir string) []ConversationTurn {
+	b, err := os.ReadFile(filepath.Join(workspaceDir, ConversationFile)) // #nosec G304 -- workspaceDir is the provider's own turn directory
+	if err != nil {
+		return nil
+	}
+	var turns []ConversationTurn
+	if err := json.Unmarshal(b, &turns); err != nil {
+		return nil
+	}
+	return turns
+}
+
+// AppendConversation records one exchange, dropping the oldest entries once
+// the transcript exceeds the size cap.
+func AppendConversation(workspaceDir, user, assistant string) error {
+	turns := append(LoadConversation(workspaceDir), ConversationTurn{User: user, Assistant: assistant})
+	total := 0
+	for i := len(turns) - 1; i >= 0; i-- {
+		total += len(turns[i].User) + len(turns[i].Assistant)
+		if total > maxConversationChars {
+			turns = turns[i+1:]
+			break
+		}
+	}
+	b, err := json.Marshal(turns)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(workspaceDir, ConversationFile), b, 0o600)
+}
+
+func renderConversation(turns []ConversationTurn) string {
+	if len(turns) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("Earlier conversation in this session:\n")
+	for _, t := range turns {
+		sb.WriteString("User: " + t.User + "\nAssistant: " + t.Assistant + "\n")
+	}
+	sb.WriteString("\nCurrent request: ")
+	return sb.String()
+}
+
+// PromptCommand builds the claude invocation for one prompt turn, anchored to
+// the workspace and carrying the transcript.
+func PromptCommand(workspace string, prompt string, history []ConversationTurn) []string {
 	return []string{
 		"claude",
 		"-p",
-		fmt.Sprintf("Your workspace is %s — create and modify files only there. %s", workspace, prompt),
+		fmt.Sprintf("Your workspace is %s — create and modify files only there. %s%s", workspace, renderConversation(history), prompt),
 		"--dangerously-skip-permissions",
 		"--output-format",
 		"json",
@@ -68,7 +129,9 @@ func ParsePromptAPIMs(stdout string) int64 {
 	return parsed.DurationAPIMs
 }
 
-var ExcludedFiles = map[string]bool{".brickie": true, "node_modules": true, "package.json": true, "package-lock.json": true}
+// ExcludedFiles are engine-internal or tooling entries hidden from a prompt
+// turn's files listing.
+var ExcludedFiles = map[string]bool{".brickie": true, ConversationFile: true, "node_modules": true, "package.json": true, "package-lock.json": true}
 
 func FilterFiles(names []string) []string {
 	out := []string{}

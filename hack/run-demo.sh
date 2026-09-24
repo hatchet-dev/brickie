@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# One command from zero to an agent session. Hatchet runs in docker compose;
-# the sandbox provider is built inside a golang container (no Go toolchain
-# needed on this machine) and runs here on the host, because Docker Sandboxes
-# micro-VMs are managed by a host daemon. Safe to re-run any time.
+# A guided setup from zero to an agent session. Every state-changing command
+# is explained and confirmed before it runs. Safe to re-run any time: steps
+# that already hold are skipped. Set BRICKIE_YES=1 to skip all prompts.
 
 cd "$(dirname "$0")/.."
 
@@ -13,44 +12,80 @@ STATE_DIR="$HOME/.brickie"
 PID_FILE="$STATE_DIR/provider.pid"
 LOG_FILE="$STATE_DIR/provider.log"
 
+ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
+info() { printf '\n\033[1m› %s\033[0m\n' "$1"; }
+
+confirm() {
+  info "$1"
+  printf '  $ %s\n' "$2"
+  if [ "${BRICKIE_YES:-}" = "1" ] || ! [ -t 0 ]; then
+    return 0
+  fi
+  read -rp "  proceed? [Y/n] " ans
+  case "${ans:-y}" in
+    n|N|no|NO) echo "  stopped — re-run this script when ready"; exit 1 ;;
+  esac
+}
+
 for bin in docker node pnpm; do
   command -v "$bin" >/dev/null || { echo "error: $bin is required" >&2; exit 1; }
 done
 docker info >/dev/null 2>&1 || { echo "error: start Docker Desktop first" >&2; exit 1; }
+ok "docker is running"
 mkdir -p "$STATE_DIR"
 
-if ! command -v sbx >/dev/null; then
+if command -v sbx >/dev/null; then
+  ok "sbx (Docker Sandboxes CLI) is installed"
+else
   if [ "$(uname -s)" != "Darwin" ]; then
     echo "error: Docker Sandboxes (sbx) is required: https://docs.docker.com/ai/sandboxes/" >&2
     exit 1
   fi
   command -v brew >/dev/null || { echo "error: Homebrew is required to install sbx: https://brew.sh" >&2; exit 1; }
-  echo "==> installing sbx (Docker Sandboxes CLI)"
+  confirm "brickie runs every agent turn in a Docker Sandboxes micro-VM, so we install Docker's sbx CLI" \
+    "brew trust docker/tap && brew install docker/tap/sbx"
   brew trust docker/tap
   brew install docker/tap/sbx
 fi
 
-if ! sbx ls >/dev/null 2>&1; then
-  echo "==> signing in to Docker Sandboxes (opens a browser)"
+if sbx ls >/dev/null 2>&1; then
+  ok "signed in to Docker Sandboxes"
+else
+  confirm "sandboxes are tied to your Docker account, so we sign you in (opens a browser)" \
+    "sbx login"
   sbx login
 fi
 
-if ! sbx policy ls 2>/dev/null | grep -q "balanced\|local-policy"; then
-  echo "==> initializing the sandbox network policy"
+if sbx policy ls 2>/dev/null | grep -q "balanced\|local-policy"; then
+  ok "sandbox network policy is in place"
+else
+  confirm "sandboxes get a default-deny network policy; 'balanced' allows package registries and model APIs" \
+    "sbx policy init balanced"
   sbx policy init balanced
 fi
 
-if [ ! -f "$STATE_DIR/claude-authed" ]; then
-  echo "==> authenticating Claude inside sandboxes (opens a browser)"
+if [ -f "$STATE_DIR/claude-authed" ]; then
+  ok "claude is authenticated inside sandboxes"
+else
+  confirm "sandboxes need access to Claude, and the credential is stored inside the sandbox layer — never in your shell (opens a browser)" \
+    "sbx run claude -- auth login"
   sbx run claude -- auth login
   touch "$STATE_DIR/claude-authed"
 fi
 
-echo "==> starting hatchet"
-docker compose up -d --wait
+if docker compose ps hatchet 2>/dev/null | grep -q healthy; then
+  ok "hatchet is running"
+else
+  confirm "agent sessions are durable Hatchet tasks, so we start Hatchet and Postgres in containers" \
+    "docker compose up -d --wait"
+  docker compose up -d --wait
+fi
 
-if [ ! -f .env ] || ! grep -q HATCHET_CLIENT_TOKEN .env; then
-  echo "==> minting a hatchet token"
+if [ -f .env ] && grep -q HATCHET_CLIENT_TOKEN .env; then
+  ok "hatchet token is in .env"
+else
+  confirm "your programs and the sandbox provider authenticate to Hatchet with a token; we mint one and store it only in .env (mode 0600, git-ignored)" \
+    "docker compose exec hatchet ./hatchet-admin token create ... >> .env"
   TOKEN=$(docker compose exec hatchet ./hatchet-admin token create --config /config --tenant-id "$TENANT_ID" | tr -d '[:space:]')
   umask 177
   {
@@ -60,8 +95,11 @@ if [ ! -f .env ] || ! grep -q HATCHET_CLIENT_TOKEN .env; then
   umask 022
 fi
 
-if [ ! -x bin/brickie ] || [ -n "$(find cmd internal go.mod go.sum -newer bin/brickie 2>/dev/null | head -1)" ]; then
-  echo "==> building the sandbox provider (inside a golang container)"
+if [ -x bin/brickie ] && [ -z "$(find cmd internal go.mod go.sum -newer bin/brickie 2>/dev/null | head -1)" ]; then
+  ok "sandbox provider binary is up to date"
+else
+  confirm "the sandbox provider is a Go program, but you don't need Go — we compile it inside a golang container" \
+    "docker run --rm -v \$PWD:/src golang:1.27 go build -o bin/brickie ./cmd/brickie"
   docker run --rm -v "$PWD:/src" -w /src \
     -v brickie_go_cache:/go/pkg/mod -v brickie_go_build:/root/.cache/go-build \
     -e CGO_ENABLED=0 -e GOOS="$(uname -s | tr '[:upper:]' '[:lower:]')" \
@@ -69,24 +107,31 @@ if [ ! -x bin/brickie ] || [ -n "$(find cmd internal go.mod go.sum -newer bin/br
     golang:1.27 go build -o bin/brickie ./cmd/brickie
 fi
 
+confirm "the provider must run on this machine (sandbox micro-VMs are managed by a host daemon); we run it in the background" \
+  "./bin/brickie worker  # logs: $LOG_FILE"
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   kill "$(cat "$PID_FILE")" 2>/dev/null || true
   sleep 1
 fi
-echo "==> starting the sandbox provider"
 set -a
 . ./.env
 set +a
 nohup ./bin/brickie worker > "$LOG_FILE" 2>&1 &
 echo $! > "$PID_FILE"
-
 for _ in $(seq 1 20); do
   grep -q "connected as grpc operator" "$LOG_FILE" 2>/dev/null && break
   kill -0 "$(cat "$PID_FILE")" 2>/dev/null || { echo "error: provider exited; see $LOG_FILE" >&2; tail -5 "$LOG_FILE" >&2; exit 1; }
   sleep 1
 done
+ok "sandbox provider is connected to hatchet"
 
-[ -d node_modules ] || { echo "==> installing example dependencies"; pnpm install --silent; }
+if [ -d node_modules ]; then
+  ok "example dependencies are installed"
+else
+  confirm "the demo is a TypeScript program using the brickie SDK; we install its dependencies" \
+    "pnpm install"
+  pnpm install --silent
+fi
 
 cat <<EOF
 
@@ -101,5 +146,26 @@ cat <<EOF
 
 EOF
 
+info "everything is ready — the demo is an interactive agent session where every message runs as a durable turn in a fresh sandbox"
+printf '  $ %s\n' "cd examples/typescript && pnpm demo"
+if [ "${BRICKIE_YES:-}" != "1" ] && [ -t 0 ]; then
+  read -rp "  start the demo? [Y/n] " ans
+  case "${ans:-y}" in
+    n|N|no|NO)
+      cat <<EOF
+
+  no problem — hatchet and the sandbox provider stay running, so you (or
+  anyone on this machine) can write your own TypeScript program against them
+  right now: export the variables from .env and use the SDK (see README.md).
+
+  demo later:     hack/run-demo.sh
+  stop provider:  kill \$(cat $PID_FILE)
+  stop hatchet:   docker compose down
+
+EOF
+      exit 0
+      ;;
+  esac
+fi
 cd examples/typescript
 exec pnpm demo
