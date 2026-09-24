@@ -1,7 +1,26 @@
 import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs';
 import * as readline from 'node:readline/promises';
 import { initClient } from './client.js';
 import '@hatchet/sandbox';
+
+function loadRepoEnv() {
+  for (const envPath of ['.env', '../.env', '../../.env']) {
+    let text = '';
+    try {
+      text = fs.readFileSync(envPath, 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of text.split('\n')) {
+      const eq = line.indexOf('=');
+      if (eq <= 0 || line.startsWith('#')) continue;
+      const key = line.slice(0, eq).trim();
+      process.env[key] = process.env[key] ?? line.slice(eq + 1).trim();
+    }
+    return;
+  }
+}
 
 const CLAUDE_IMAGE = process.env.DEMO_CLAUDE_IMAGE;
 
@@ -19,7 +38,13 @@ function breakdown(totalMs: number, timings: Record<string, number> = {}) {
 }
 
 async function main() {
+  loadRepoEnv();
   process.env.HATCHET_CLIENT_LOG_LEVEL = process.env.HATCHET_CLIENT_LOG_LEVEL ?? 'ERROR';
+  if (process.env.HATCHET_CLIENT_TOKEN) {
+    console.log('hatchet: using the instance from HATCHET_CLIENT_TOKEN');
+  } else {
+    console.log('hatchet: no token found; starting an embedded engine (runs are not on your dashboard)');
+  }
   const hatchet = await initClient();
 
   const session = hatchet.durableTask({
@@ -31,8 +56,9 @@ async function main() {
       let snapshot: string | undefined;
       let turns = 0;
       for (;;) {
-        const ev = await ctx.waitForEvent('session-message', undefined, undefined, input.sessionId);
-        const message = String((ev as any).message ?? '');
+        const ev = await ctx.waitForEvent('session-message', `input.sessionId == '${input.sessionId}'`);
+        const payload = (ev as any)['session-message'] ?? ev;
+        const message = String(payload.message ?? '');
         if (message === '/exit') break;
         if (message.startsWith('/restore ')) {
           snapshot = message.split(/\s+/)[1];
@@ -101,7 +127,7 @@ async function main() {
     }
   };
 
-  const send = (message: string) => hatchet.events.push('session-message', { message }, { scope: sessionId });
+  const send = (message: string) => hatchet.events.push('session-message', { sessionId, message });
 
   const endSession = async () => {
     await send('/exit');
