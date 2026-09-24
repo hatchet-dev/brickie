@@ -1,7 +1,7 @@
 import { DurableContext, HatchetClient, JsonObject } from '@hatchet-dev/typescript-sdk/v1';
 import { setupTelemetry } from './otel.js';
 
-export const SANDBOX_TASK_NAME = 'brickie-sandbox';
+const SANDBOX_TASK_NAME = 'brickie-sandbox';
 
 type Ctx = DurableContext<any>;
 
@@ -57,30 +57,15 @@ function nextSandboxId(ctx: Ctx) {
   return `${ctx.workflowRunId()}-${n}`;
 }
 
-const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-
 export class Sandbox {
   readonly commands: { run: (cmd: string) => Promise<CommandResult> };
-  readonly files: {
-    read: (path: string) => Promise<string>;
-    write: (path: string, content: string) => Promise<void>;
-    list: (path?: string) => Promise<string[]>;
-  };
 
   private constructor(
     private readonly ctx: Ctx,
     readonly sandboxId: string,
     private readonly opts: SandboxOpts
   ) {
-    this.commands = { run: (cmd) => this.command(cmd) };
-    this.files = {
-      read: async (path) => (await this.command(`cat ${shellQuote(path)}`)).stdout,
-      write: async (path, content) => {
-        const b64 = Buffer.from(content).toString('base64');
-        await this.command(`printf '%s' ${b64} | base64 -d > ${shellQuote(path)}`);
-      },
-      list: async (path = '.') => (await this.command(`ls -1A ${shellQuote(path)}`)).stdout.split('\n').filter(Boolean),
-    };
+    this.commands = { run: (cmd) => this.turn<CommandResult>('$command', { cmd }) };
   }
 
   static async create(ctx: Ctx, opts: SandboxOpts = {}): Promise<Sandbox> {
@@ -90,21 +75,12 @@ export class Sandbox {
     return sandbox;
   }
 
-  static connect(ctx: Ctx, sandboxId: string): Sandbox {
-    void setupTelemetry();
-    return new Sandbox(ctx, sandboxId, {});
-  }
-
   async prompt(text: string): Promise<PromptResult> {
     return this.turn<PromptResult>('$prompt', { prompt: text });
   }
 
   async kill(): Promise<void> {
     await this.turn('$destroy', {});
-  }
-
-  private command(cmd: string): Promise<CommandResult> {
-    return this.turn<CommandResult>('$command', { cmd });
   }
 
   private async turn<T = JsonObject>(fn: string, input: JsonObject): Promise<T> {
@@ -130,7 +106,6 @@ export class Sandbox {
 
 export interface SandboxNamespace {
   create(ctx: Ctx, opts?: SandboxOpts): Promise<Sandbox>;
-  connect(ctx: Ctx, sandboxId: string): Sandbox;
 }
 
 declare module '@hatchet-dev/typescript-sdk/v1' {
@@ -142,6 +117,6 @@ declare module '@hatchet-dev/typescript-sdk/v1' {
 Object.defineProperty(HatchetClient.prototype, 'sandbox', {
   configurable: true,
   get(): SandboxNamespace {
-    return { create: Sandbox.create, connect: Sandbox.connect };
+    return { create: Sandbox.create };
   },
 });
