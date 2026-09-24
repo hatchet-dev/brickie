@@ -77,16 +77,6 @@ const session = hatchet.durableTask({
 
 Each call is one Hatchet task. Each result also has `snapshotId` and `timings`. The durable task that makes the calls is the session.
 
-### Build an interactive session
-
-Make one durable task. Create one sandbox in it. Then repeat these steps:
-
-1. Wait for the next message with `ctx.waitForEvent`.
-2. Run `sandbox.prompt` or `sandbox.commands.run`.
-3. Send the result to the client with `ctx.putStream`.
-
-The client sends messages with `hatchet.events.push`. The client reads results with `hatchet.runs.subscribeToStream`. See `examples/typescript/demo.ts`.
-
 ### Connect to Hatchet
 
 Set `HATCHET_CLIENT_TOKEN` to use a Hatchet instance. The provider then runs the turns.
