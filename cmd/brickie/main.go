@@ -9,12 +9,9 @@ import (
 func main() {
 	root := &cobra.Command{
 		Use:   "brickie",
-		Short: "Agent sandboxes as durable tasks. Run `brickie dev` to try it on this machine.",
+		Short: "Agent sandboxes as durable tasks.",
 	}
-	root.AddCommand(devCmd())
-	worker := workerCmd()
-	worker.Hidden = true
-	root.AddCommand(worker)
+	root.AddCommand(workerCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}

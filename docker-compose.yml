@@ -1,7 +1,7 @@
 name: brickie
 services:
   postgres:
-    image: postgres:15.6
+    image: postgres:18
     command: postgres -c 'max_connections=200'
     restart: always
     environment:
@@ -36,9 +36,15 @@ services:
       SERVER_AUTH_SET_EMAIL_VERIFIED: "t"
       SERVER_GRPC_OPERATORS_ENABLED: "t"
       SERVER_INTERNAL_CLIENT_INTERNAL_GRPC_BROADCAST_ADDRESS: localhost:7077
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -q -O- http://localhost:8888/api/ready || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     volumes:
       - brickie_hatchet_config:/config
-
 volumes:
   brickie_postgres_data:
   brickie_hatchet_config:

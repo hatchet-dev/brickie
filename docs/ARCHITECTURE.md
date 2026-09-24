@@ -4,11 +4,11 @@ brickie runs agent sandboxes as Hatchet durable tasks. Every sandbox turn is one
 
 ## The bet
 
-Sandboxes are a complement to orchestration. Companies that need sandboxes also need durable orchestration, retries, and observability, which is what Hatchet sells. brickie is therefore not trying to win on isolation primitives or filesystem technology: sandboxes come from Docker Sandboxes, state and reliability come from Hatchet, and brickie is the thin engine that ties them together.
+Sandboxes are a complement to orchestration. Companies that need sandboxes also need durable orchestration, retries, and observability, which is what Hatchet sells. brickie is therefore not trying to win on isolation primitives or filesystem technology: sandboxes are Docker Sandboxes micro-VMs, state and reliability come from Hatchet, and brickie is the thin engine that ties them together.
 
 ## State model
 
-Agent state has two layers today:
+Agent state has two layers:
 
 | Layer | Owner | Mechanism |
 | --- | --- | --- |
@@ -21,10 +21,11 @@ The durable log answers "what has the agent decided and observed". The filesyste
 
 A turn is one durable Hatchet task named `brickie-sandbox`. The input carries the function to run (`$command`, `$prompt`, or a user function), the input payload, and an optional snapshot id. The provider:
 
-1. Restores the workspace from the snapshot (empty workspace when no snapshot id is given).
-2. Runs the turn in a fresh Docker Sandboxes micro-VM.
-3. Saves the workspace as a new snapshot named after the run id.
-4. Returns `{ output, snapshotId, timings }`.
+1. Starts a fresh Docker Sandboxes micro-VM for the turn.
+2. Restores the workspace from the snapshot (empty when no snapshot id is given).
+3. Runs the turn.
+4. Saves the workspace as a new snapshot named after the run id and removes the sandbox.
+5. Returns `{ output, snapshotId, timings }`.
 
 Retries are safe because the snapshot id in the input never changes and the output snapshot is keyed by run id. A retried turn starts from the same filesystem state and overwrites its own snapshot. A fork is two turns started from the same snapshot id. This makes arbitrary shell commands idempotent from the orchestrator's point of view.
 
@@ -36,10 +37,7 @@ A session is one long-lived durable task that loops on `waitForEvent` for user m
 
 ### TypeScript SDK (`sdks/typescript`)
 
-A thin client. It spawns `brickie-sandbox` durable child tasks by name from the caller's durable context and returns typed results. It makes no placement decisions:
-
-- `HATCHET_CLIENT_TOKEN` set: the provider registered in that tenant runs the turns.
-- No token: the SDK starts an embedded Hatchet engine and spawns `brickie worker` as a sidecar.
+A thin client. It spawns `brickie-sandbox` durable child tasks by name from the caller's durable context and returns typed results. It makes no placement decisions: with `HATCHET_CLIENT_TOKEN` set, the provider registered in that tenant runs the turns; without one, it starts an embedded Hatchet engine and spawns `brickie worker` as a sidecar (a development convenience — the supported path is the compose stack).
 
 `createFunction` serializes a JavaScript function into the turn input (`fnSource`); the engine runs it inside the sandbox with a small node runner.
 
@@ -49,16 +47,14 @@ Defines the turn contract, the durable task, the operator session, and the snaps
 
 ### Local driver (`internal/driver/local`)
 
-Docker Sandboxes through the `sbx` CLI (Docker publishes no Go client). One micro-VM per turn: create with the host workspace bind-mounted, exec the turn, tar the workspace, remove the sandbox.
+One Docker Sandboxes micro-VM per turn through the `sbx` CLI (Docker publishes no Go client): create with the host workspace bind-mounted, exec the turn, tar the workspace, remove the sandbox. No host environment variables are injected; Claude authenticates through the credential Docker Sandboxes stores in the sandbox agent kit.
 
 ### Provider (`brickie worker`)
 
-The provider registers with Hatchet as a gRPC operator (falling back to a classic worker when the engine predates operator support) and executes `brickie-sandbox` turns with the local driver. Desired state lives in Hatchet's run history, so retries, timeouts, and replay come from the orchestrator. The machine only ever dials out to Hatchet; there is no inbound API.
-
-## Credentials
-
-No environment variables are copied from the host into local sandboxes. Claude authenticates through the credential Docker Sandboxes stores in the sandbox agent kit (`brickie dev` sets it up).
+The provider registers with Hatchet as a gRPC operator (falling back to a classic worker when the engine predates operator support) and executes `brickie-sandbox` turns with the local driver. Desired state lives in Hatchet's run history, so retries, timeouts, and replay come from the orchestrator.
 
 ## Deployment
 
-`docker compose up -d` runs Hatchet (lite + Postgres) on the machine. `brickie dev` configures Docker Sandboxes. The TypeScript SDK plus a Hatchet token is everything a program needs.
+`docker compose up` runs Hatchet (lite + Postgres). The provider runs on the host because Docker Sandboxes micro-VMs are managed by a host daemon (`sandboxd`) that is only reachable over a host Unix socket — a container cannot drive it. To keep the host toolchain-free, `hack/run-demo.sh` builds the provider inside a golang container and manages it as a background process; it also does the one-time Docker Sandboxes setup, mints a Hatchet token into `.env`, and starts the demo session. User programs run on the host with node and the TypeScript SDK, pointed at the stack by `HATCHET_CLIENT_TOKEN`.
+
+Docker publishes Linux builds of Docker Sandboxes whose runtime uses KVM, so on Linux hosts (and macOS hosts with nested virtualization) a fully containerized `sandboxd` service is a plausible future step.

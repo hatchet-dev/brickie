@@ -25,7 +25,6 @@ func envOr(key, fallback string) string {
 }
 
 type providerConfig struct {
-	driver      string
 	snapshotDir string
 	turnTimeout time.Duration
 	slots       int
@@ -40,8 +39,6 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 			defaultTimeout = d
 		}
 	}
-	cmd.Flags().StringVar(&providerCfg.driver, "driver", "local", "sandbox driver (only local is supported)")
-	_ = cmd.Flags().MarkHidden("driver")
 	cmd.Flags().StringVar(&providerCfg.snapshotDir, "snapshot-dir", envOr("BRICKIE_SNAPSHOT_DIR", engine.DefaultSnapshotDir()), "snapshot storage directory")
 	cmd.Flags().DurationVar(&providerCfg.turnTimeout, "turn-timeout", defaultTimeout, "execution timeout per sandbox turn")
 	defaultSlots := 10
@@ -54,9 +51,6 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 }
 
 func runProvider(ctx context.Context, c providerConfig) error {
-	if c.driver != "local" {
-		return fmt.Errorf("unknown driver %q: only local Docker Sandboxes are supported", c.driver)
-	}
 	store := engine.FSSnapshotStore{Dir: c.snapshotDir}
 	store.Prune(7 * 24 * time.Hour)
 	opts := engine.ProviderOpts{

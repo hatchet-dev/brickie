@@ -61,7 +61,7 @@ func sbx(ctx context.Context, args ...string) (string, error) {
 		detail := res.Stderr + res.Stdout
 		switch {
 		case notAuthenticated.MatchString(detail):
-			return "", errors.New("Docker Sandboxes is not authenticated: run `sbx login` (or `brickie dev`) and retry")
+			return "", errors.New("Docker Sandboxes is not authenticated: run `sbx login` (or `hack/run-demo.sh`) and retry")
 		case kitFailure.MatchString(detail):
 			return "", errors.New("Docker Sandboxes could not apply the agent kit to this image: `image` must be an sbx template built from the Docker Sandboxes base image, not an arbitrary Docker image")
 		}
