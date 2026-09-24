@@ -1,6 +1,6 @@
 # Working on brickie
 
-brickie runs agent sandboxes as Hatchet durable tasks. Read `docs/ARCHITECTURE.md` before changing anything structural. The README covers how to run it.
+brickie runs agent sandboxes as Hatchet durable tasks. The README covers how to run it.
 
 ## Layout
 

@@ -4,8 +4,15 @@ set -euo pipefail
 # A guided setup from zero to an agent session. Every state-changing command
 # is explained and confirmed before it runs. Safe to re-run any time: steps
 # that already hold are skipped. Set BRICKIE_YES=1 to skip all prompts.
+#
+# Usage: hack/run-demo.sh [demo|session]
+#   demo    (default) one durable turn per message
+#   session one long-lived durable task, every turn inside it
 
 cd "$(dirname "$0")/.."
+
+DEMO_SCRIPT="demo"
+[ "${1:-}" = "session" ] && DEMO_SCRIPT="demo:session"
 
 TENANT_ID=707d0855-80ab-4e1f-a156-f1c4546cbf52
 STATE_DIR="$HOME/.brickie"
@@ -93,7 +100,7 @@ fi
 EXTERNAL_HATCHET=""
 if [ -f .env ] && grep -q HATCHET_CLIENT_TOKEN .env; then
   TOKEN_IN_ENV=$(grep '^HATCHET_CLIENT_TOKEN=' .env | head -1 | cut -d= -f2-)
-  if ! node -e 'const c=JSON.parse(Buffer.from(process.argv[1].split(".")[1],"base64url").toString());process.exit(/localhost|127\.0\.0\.1/.test((c.server_url||"")+(c.grpc_broadcast_address||""))?0:1)' "$TOKEN_IN_ENV" 2>/dev/null; then
+  if ! TOKEN_IN_ENV="$TOKEN_IN_ENV" node -e 'const c=JSON.parse(Buffer.from(process.env.TOKEN_IN_ENV.split(".")[1],"base64url").toString());process.exit(/localhost|127\.0\.0\.1/.test((c.server_url||"")+(c.grpc_broadcast_address||""))?0:1)' 2>/dev/null; then
     EXTERNAL_HATCHET=1
   fi
 fi
@@ -106,6 +113,12 @@ else
   confirm "agent sessions are durable Hatchet tasks, so we start Hatchet and Postgres in containers" \
     "docker compose up -d --wait"
   docker compose up -d --wait
+fi
+
+if [ -z "$EXTERNAL_HATCHET" ]; then
+  docker compose exec -T postgres psql -U hatchet -q -c \
+    "update \"Worker\" set \"isActive\" = false where \"isActive\" and \"lastHeartbeatAt\" < now() - interval '30 seconds'" >/dev/null 2>&1 || true
+  ok "cleared any dead worker registrations"
 fi
 
 if [ -f .env ] && grep -q HATCHET_CLIENT_TOKEN .env; then
@@ -210,4 +223,4 @@ EOF
 fi
 cd examples/typescript
 unset HATCHET_CLIENT_TLS_ROOT_CA_FILE HATCHET_CLIENT_TLS_STRATEGY
-exec pnpm demo
+exec pnpm "$DEMO_SCRIPT"

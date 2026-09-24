@@ -1,6 +1,6 @@
 # brickie
 
-Agent sandboxes as durable tasks. Every agent turn runs as a Hatchet durable task inside its own Docker Sandboxes micro-VM. Each turn ends with an immutable workspace snapshot. Later turns can resume or fork any snapshot, files and conversation included. See `docs/ARCHITECTURE.md` for the design.
+Agent sandboxes as durable tasks. Every agent turn runs as a Hatchet durable task inside its own Docker Sandboxes micro-VM. Each turn ends with an immutable workspace snapshot. Later turns can resume or fork any snapshot, files and conversation included.
 
 ## Requirements
 
@@ -53,7 +53,9 @@ Every method returns `{ output, snapshotId, timings }`:
 - `createFunction(name, fn)` registers a JavaScript function that runs inside the sandbox. Call it with `.run(ctx, input, opts?)`.
 - `executeAll(ctx, items)` runs several turns in parallel as one durable step.
 
-Pass `{ from: snapshotId }` to continue from a snapshot. Passing the same `from` twice forks it. Omit it for an empty workspace. For long-running sessions, loop on `ctx.waitForEvent` and spawn one turn per message. `examples/typescript/demo.ts` is the reference.
+Pass `{ from: snapshotId }` to continue from a snapshot. Passing the same `from` twice forks it. Omit it for an empty workspace.
+
+An interactive session is just a durable task per message that threads the last snapshot id as `from`. `examples/typescript/demo.ts` is the reference: a `hatchet.durableTask` whose body calls `hatchet.sandbox()`, and a REPL that calls `turn.run({ message, from })`.
 
 When `HATCHET_CLIENT_TOKEN` is set, the SDK talks to that Hatchet instance and the provider executes the turns. When it is unset, the SDK starts an embedded Hatchet engine and the provider itself, so a bare program still runs with nothing else installed.
 

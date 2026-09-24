@@ -1,7 +1,7 @@
 name: brickie
 services:
   postgres:
-    image: postgres:18
+    image: postgres:17
     command: postgres -c 'max_connections=200'
     restart: always
     environment:
@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: hatchet
       POSTGRES_DB: hatchet
     volumes:
-      - brickie_postgres_data:/var/lib/postgresql
+      - brickie_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d hatchet -U hatchet"]
       interval: 10s
@@ -19,8 +19,8 @@ services:
   hatchet:
     image: ghcr.io/hatchet-dev/hatchet/hatchet-lite:latest
     ports:
-      - "8888:8888"
-      - "7077:7077"
+      - "127.0.0.1:8888:8888"
+      - "127.0.0.1:7077:7077"
     depends_on:
       postgres:
         condition: service_healthy

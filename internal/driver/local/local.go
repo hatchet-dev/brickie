@@ -36,7 +36,14 @@ type execResult struct {
 }
 
 func runSbx(ctx context.Context, args ...string) (execResult, error) {
+	return runSbxIn(ctx, nil, args...)
+}
+
+func runSbxIn(ctx context.Context, stdin []byte, args ...string) (execResult, error) {
 	cmd := exec.CommandContext(ctx, "sbx", args...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -93,16 +100,6 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	if err := os.MkdirAll(ctrl, 0o755); err != nil {
 		return engine.TurnResponse{}, err
 	}
-	if req.SnapshotTar != nil {
-		inTar := filepath.Join(dir, "in.tar.gz")
-		if err := os.WriteFile(inTar, req.SnapshotTar, 0o644); err != nil {
-			return engine.TurnResponse{}, err
-		}
-		if out, err := exec.CommandContext(ctx, "tar", "-xzf", inTar, "-C", workspace).CombinedOutput(); err != nil {
-			return engine.TurnResponse{}, fmt.Errorf("restore snapshot: %s", out)
-		}
-	}
-
 	timings := map[string]int64{}
 	phase := func(name string, start time.Time) {
 		timings[name] = time.Since(start).Milliseconds()
@@ -131,6 +128,21 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		_, _ = runSbx(context.Background(), "rm", "-f", req.SandboxName)
 		req.Logf("sbx sandbox %s removed", req.SandboxName)
 	}()
+
+	// The snapshot tar is agent-influenced, so it is extracted inside the
+	// sandbox: a hostile entry can only unpack within the micro-VM.
+	if req.SnapshotTar != nil {
+		restoreStart := time.Now()
+		res, err := runSbxIn(ctx, req.SnapshotTar, "exec", "-w", workspace, req.SandboxName, "tar", "-xzf", "-", "-C", workspace)
+		if err != nil {
+			return engine.TurnResponse{}, fmt.Errorf("restore snapshot: %w", err)
+		}
+		if res.ExitCode != 0 {
+			return engine.TurnResponse{}, fmt.Errorf("restore snapshot (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+		}
+		phase("restore", restoreStart)
+		req.Logf("workspace restored from snapshot tar")
+	}
 
 	execStart := time.Now()
 	var output any
