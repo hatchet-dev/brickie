@@ -1,31 +1,48 @@
 # brickie
 
-Agent sandboxes as Hatchet durable tasks. A sandbox is a Docker Sandboxes micro-VM. Every agent turn runs inside it as a Hatchet task and ends with an immutable workspace snapshot. The session that drives the turns is a durable task. Any snapshot can start a new sandbox, so you can resume or fork a session at any turn, files and conversation included.
+brickie runs agent sandboxes as Hatchet tasks.
+
+A sandbox is a Docker Sandboxes micro-VM. Each agent turn runs in the sandbox as a Hatchet task. Each turn makes a snapshot of the workspace. A snapshot does not change. You can start a new sandbox from any snapshot. This lets you continue or fork a session at any turn. The files and the conversation are in the snapshot.
 
 ## Requirements
 
-- Docker Desktop on macOS (Docker Sandboxes ships with it)
-- Node and pnpm
-- Homebrew (installs the `sbx` CLI on first run)
+- Docker Desktop on macOS. Docker Sandboxes is part of Docker Desktop.
+- Node and pnpm.
+- Homebrew. The setup script uses Homebrew to install the `sbx` CLI.
 
-## Run it
+You do not need Go. You do not need a Hatchet account.
+
+## Run the demo
+
+Run this command:
 
 ```bash
 hack/run-demo.sh
 ```
 
-The script is a guided setup. It explains each step and asks before running it. It sets up Docker Sandboxes, starts Hatchet with docker compose, saves a token into `.env`, builds and starts the provider, and opens the demo session.
+The script does the setup step by step. Before each step, it shows the command and asks for your approval. The script:
 
-The demo is one long-lived durable task, `agent-session`, with one sandbox for the whole session. It waits for each message and runs the turn inside that sandbox:
+1. Installs and configures Docker Sandboxes.
+2. Starts Hatchet with Docker Compose.
+3. Makes a Hatchet token and writes it to `.env`.
+4. Builds the sandbox provider in a Go container.
+5. Starts the sandbox provider.
+6. Starts the demo session.
 
-- `<text>` runs a Claude turn. The conversation carries across turns.
-- `!<command>` runs a shell command.
-- `/restore <snapshot-id>` replaces the sandbox with a new one forked from that snapshot.
-- `/exit` ends the session.
+You can run the script again at any time. It skips the steps that are complete.
 
-Each turn prints its snapshot ID and a latency breakdown. The dashboard at [http://localhost:8888](http://localhost:8888) (`admin@example.com` / `Admin123!!`) shows the session run and every turn under it. The demo source is `examples/typescript/demo.ts`.
+The demo is one durable task with the name `agent-session`. The task makes one sandbox. The sandbox stays alive for the full session. Each message you type runs as one turn in that sandbox:
+
+- Type text to send a prompt to Claude. Claude keeps the conversation between turns.
+- Type `!` and a command to run a shell command.
+- Type `/restore` and a snapshot ID to start a new sandbox from that snapshot.
+- Type `/exit` to end the session.
+
+After each turn, the demo shows the snapshot ID and the time for each step. Open [http://localhost:8888](http://localhost:8888) to see the session and its turns in the Hatchet dashboard. Log in with `admin@example.com` and `Admin123!!`. The demo code is in `examples/typescript/demo.ts`.
 
 ## TypeScript SDK
+
+The SDK has the same shape as the E2B sandbox SDK. A sandbox is one micro-VM. You create a sandbox in a Hatchet durable task. You run commands and Claude turns in the sandbox. You kill the sandbox when you are done.
 
 ```ts
 import '@hatchet/sandbox';
@@ -34,36 +51,62 @@ const session = hatchet.durableTask({
   name: 'agent-session',
   executionTimeout: '1h',
   fn: async (input, ctx) => {
-    const sbx = hatchet.sandbox();
-    const t1 = await sbx.executePrompt(ctx, 'create haiku.txt with a haiku');
-    const t2 = await sbx.executeCommand(ctx, 'cat haiku.txt');
+    const sandbox = await hatchet.sandbox.create(ctx);
+    await sandbox.prompt('create haiku.txt with a haiku');
+    const haiku = await sandbox.files.read('haiku.txt');
+    const lines = await sandbox.commands.run('wc -l haiku.txt');
 
-    const fork = hatchet.sandbox({ from: t2.snapshotId });
-    const t3 = await fork.executePrompt(ctx, 'make it darker');
+    const fork = await hatchet.sandbox.create(ctx, { from: lines.snapshotId });
+    await fork.prompt('make it darker');
 
-    await sbx.destroy(ctx);
-    await fork.destroy(ctx);
-    return { t2, t3 };
+    await sandbox.kill();
+    await fork.kill();
+    return { haiku };
   },
 });
 ```
 
-`hatchet.sandbox()` is one sandbox. Every call on the handle runs in that same micro-VM, so files and state carry from turn to turn. Each turn is a Hatchet task and ends with a snapshot. The sandbox is created on the first turn, not when the handle is made.
+### Create and connect
 
-By default the sandbox uses the Docker Sandboxes template for the `claude` agent, which has the Claude CLI, Node, git, and a shell. `hatchet.sandbox({ image })` picks another sbx template.
+- `hatchet.sandbox.create(ctx, options)` starts a micro-VM. This is the cold start.
+- `options.template` selects a Docker Sandboxes template. The default is the `claude` template. It has the Claude CLI, Node, git, and a shell.
+- `options.from` starts the sandbox from a snapshot. Two sandboxes with the same `from` are a fork.
+- `hatchet.sandbox.connect(ctx, sandboxId)` connects to a sandbox that already runs.
 
-Every method returns `{ output, snapshotId, timings }`:
+### Use the sandbox
 
-- `executeCommand(ctx, cmd)` runs a shell command. Output is `{ stdout, stderr, exitCode }`. A non-zero exit does not fail the turn.
-- `executePrompt(ctx, prompt)` runs one Claude turn. Output is `{ reply, files }`.
-- `createFunction(name, fn)` registers a JavaScript function that runs inside the sandbox. Call it with `.run(ctx, input)`.
-- `executeAll(ctx, items)` runs several turns as one durable step. On one sandbox they run in order.
-- `destroy(ctx)` removes the sandbox. Sandboxes idle for 15 minutes are removed anyway (`--sandbox-idle-ttl` on the provider).
+- `sandbox.commands.run(cmd)` runs a shell command. It returns `{ stdout, stderr, exitCode }`. A non-zero exit code does not cause an error.
+- `sandbox.prompt(text)` runs one Claude turn. It returns `{ reply, files }`. Claude keeps the conversation between turns.
+- `sandbox.files.read(path)` returns the content of a file.
+- `sandbox.files.write(path, content)` writes a file.
+- `sandbox.files.list(path)` lists a directory.
+- `sandbox.kill()` removes the sandbox. The provider also removes a sandbox after 15 minutes without a turn. Set `--sandbox-idle-ttl` on the provider to change this time.
 
-## Using an external Hatchet instance
+Each call is one Hatchet task. Each result also has `snapshotId` and `timings`. The durable task that makes the calls is the session.
 
-The compose Hatchet is just a default. To use Hatchet Cloud or any self-hosted instance:
+### Build an interactive session
 
-1. Put your tenant's token in `.env` as `HATCHET_CLIENT_TOKEN`, replacing the minted one.
-2. Remove the `HATCHET_CLIENT_TLS_STRATEGY=none` line. It is only for the local compose engine.
-3. Re-run `hack/run-demo.sh`. It detects the external token, skips the compose engine, and restarts the provider against your instance.
+Make one durable task. Create one sandbox in it. Then repeat these steps:
+
+1. Wait for the next message with `ctx.waitForEvent`.
+2. Run `sandbox.prompt` or `sandbox.commands.run`.
+3. Send the result to the client with `ctx.putStream`.
+
+The client sends messages with `hatchet.events.push`. The client reads results with `hatchet.runs.subscribeToStream`. See `examples/typescript/demo.ts`.
+
+### Connect to Hatchet
+
+Set `HATCHET_CLIENT_TOKEN` to use a Hatchet instance. The provider then runs the turns.
+
+If you do not set `HATCHET_CLIENT_TOKEN`, the example starts an embedded Hatchet engine. It also starts the provider. This needs the `brickie` binary. Put it on `PATH`, or set `BRICKIE_BIN` to its location.
+
+## Use an external Hatchet instance
+
+The Hatchet in Docker Compose is the default. To use Hatchet Cloud or your own Hatchet instance:
+
+1. Get a token from your tenant.
+2. Put the token in `.env` as `HATCHET_CLIENT_TOKEN`. Replace the token from the script.
+3. Remove the line `HATCHET_CLIENT_TLS_STRATEGY=none`. This line is only for the local Hatchet.
+4. Run `hack/run-demo.sh` again.
+
+The script finds the external token. It does not start the local Hatchet. It restarts the provider with your instance.

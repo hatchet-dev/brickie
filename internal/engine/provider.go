@@ -60,7 +60,6 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		SandboxName:  "brickie-" + sandboxID,
 		Image:        resolved.Ref,
 		Fn:           input.Fn,
-		FnSource:     input.FnSource,
 		Input:        input.Input,
 		SnapshotID:   input.SnapshotID,
 		CheckpointID: runID,

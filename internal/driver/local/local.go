@@ -54,7 +54,7 @@ func (d *Driver) pruneOrphans() {
 	if err != nil || res.ExitCode != 0 {
 		return
 	}
-	for _, line := range strings.Split(res.Stdout, "\n") {
+	for line := range strings.SplitSeq(res.Stdout, "\n") {
 		name := strings.Fields(line)
 		if len(name) > 0 && strings.HasPrefix(name[0], "brickie-") {
 			_, _ = runSbx(context.Background(), "rm", "-f", name[0])
@@ -247,6 +247,10 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		req.Logf("workspace restored from snapshot tar")
 	}
 
+	if req.Fn == engine.CreateFn {
+		return engine.TurnResponse{Output: json.RawMessage(`{"created":true}`), Timings: timings}, nil
+	}
+
 	execStart := time.Now()
 	var output any
 	switch req.Fn {
@@ -283,28 +287,7 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		}
 		output = engine.PromptOutput{Reply: reply, Files: listFiles(workspace)}
 	default:
-		if req.FnSource == "" {
-			return engine.TurnResponse{}, fmt.Errorf("unknown sandbox fn %q and no fnSource provided", req.Fn)
-		}
-		ctrl := filepath.Join(workspace, ".brickie")
-		if err := os.MkdirAll(ctrl, 0o750); err != nil {
-			return engine.TurnResponse{}, err
-		}
-		if err := os.WriteFile(filepath.Join(ctrl, "runner.cjs"), []byte(engine.RunnerJS), 0o600); err != nil {
-			return engine.TurnResponse{}, err
-		}
-		if err := os.WriteFile(filepath.Join(ctrl, "input.json"), engine.RunnerInput(req.FnSource, req.Input), 0o600); err != nil {
-			return engine.TurnResponse{}, err
-		}
-		if _, err := sbx(ctx, "exec", "-w", workspace, req.SandboxName, "node", ".brickie/runner.cjs"); err != nil {
-			return engine.TurnResponse{}, err
-		}
-		raw, err := os.ReadFile(filepath.Join(ctrl, "output.json")) // #nosec G304 -- ctrl is the provider's own workspace directory
-		if err != nil {
-			return engine.TurnResponse{}, fmt.Errorf("read turn output: %w", err)
-		}
-		output = json.RawMessage(raw)
-		_ = os.RemoveAll(ctrl)
+		return engine.TurnResponse{}, fmt.Errorf("unknown sandbox fn %q", req.Fn)
 	}
 
 	phase("exec", execStart)

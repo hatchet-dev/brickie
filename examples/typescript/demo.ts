@@ -23,26 +23,24 @@ async function main() {
     name: 'agent-session',
     executionTimeout: '2h',
     fn: async (input: { sessionId: string }, ctx) => {
-      const image = process.env.DEMO_CLAUDE_IMAGE ? { image: process.env.DEMO_CLAUDE_IMAGE } : {};
-      let sandbox = hatchet.sandbox(image);
+      const opts = process.env.DEMO_TEMPLATE ? { template: process.env.DEMO_TEMPLATE } : {};
+      let sandbox = await hatchet.sandbox.create(ctx, opts);
       for (;;) {
         const { message } = await ctx.waitForEvent('turn', `input.sessionId == '${input.sessionId}'`);
         const text = String(message);
         if (text === '/exit') {
-          await sandbox.destroy(ctx);
+          await sandbox.kill();
           return { done: true };
         }
         if (text.startsWith('/restore ')) {
           const from = text.split(/\s+/)[1];
-          await sandbox.destroy(ctx);
-          sandbox = hatchet.sandbox({ ...image, from });
-          await ctx.putStream(JSON.stringify({ info: `new sandbox forked from snapshot ${from}` }));
+          await sandbox.kill();
+          sandbox = await hatchet.sandbox.create(ctx, { ...opts, from });
+          await ctx.putStream(JSON.stringify({ info: `new sandbox ${sandbox.sandboxId} forked from snapshot ${from}` }));
           continue;
         }
-        const turn = text.startsWith('!')
-          ? await sandbox.executeCommand(ctx, text.slice(1))
-          : await sandbox.executePrompt(ctx, text);
-        await ctx.putStream(JSON.stringify(turn));
+        const result = text.startsWith('!') ? await sandbox.commands.run(text.slice(1)) : await sandbox.prompt(text);
+        await ctx.putStream(JSON.stringify(result));
       }
     },
   });
@@ -83,15 +81,14 @@ async function main() {
 
     const started = Date.now();
     await hatchet.events.push('turn', { sessionId, message: line });
-    const turn = JSON.parse((await stream.next()).value);
-    if (turn.info) {
-      console.log(`${turn.info}\n`);
+    const result = JSON.parse((await stream.next()).value);
+    if (result.info) {
+      console.log(`${result.info}\n`);
       continue;
     }
-    const out = turn.output ?? {};
-    console.log(out.reply ?? out.stdout ?? '');
-    if (out.stderr) console.log(out.stderr);
-    console.log(`(snapshot ${turn.snapshotId} · ${breakdown(Date.now() - started, turn.timings)})\n`);
+    console.log(result.reply ?? result.stdout ?? '');
+    if (result.stderr) console.log(result.stderr);
+    console.log(`(snapshot ${result.snapshotId} · ${breakdown(Date.now() - started, result.timings)})\n`);
   }
 }
 

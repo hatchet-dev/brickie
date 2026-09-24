@@ -1,11 +1,9 @@
 export {
-  sandbox,
+  Sandbox,
   SANDBOX_TASK_NAME,
-  type Sandbox,
+  type SandboxNamespace,
   type SandboxOpts,
-  type SandboxFn,
-  type ExecuteOpts,
-  type ExecuteItem,
-  type SandboxTurnInput,
-  type TurnResult,
+  type CommandResult,
+  type PromptResult,
+  type Timings,
 } from './sandbox.js';
