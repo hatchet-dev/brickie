@@ -37,7 +37,7 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 	runner := newTurnRunner(opts)
 	token := os.Getenv("HATCHET_CLIENT_TOKEN")
 	if token == "" {
-		return fmt.Errorf("HATCHET_CLIENT_TOKEN is required for operator mode")
+		return fmt.Errorf("%w: HATCHET_CLIENT_TOKEN is not set", ErrOperatorUnavailable)
 	}
 	exchange, err := hostgrpc.NewStaticExchange(token)
 	if err != nil {

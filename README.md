@@ -10,7 +10,7 @@ The SDKs only trigger turns. The `brickie` engine (Go) executes them, either loc
 
 | Path | Contents |
 | --- | --- |
-| `cmd/brickie/` | CLI. `worker` runs the sandbox provider as a Hatchet worker. `bootstrap-local` and `bootstrap-kind` set up the two supported environments. |
+| `cmd/brickie/` | CLI. `dev` sets up local sandboxes on this machine. Hidden commands: `worker` (the sandbox provider), `bootstrap-kind`, `bootstrap-aws`. |
 | `internal/engine/` | Durable task definition, snapshot store, turn contract, node runner. |
 | `internal/driver/local/` | Docker Sandboxes driver. Uses the `sbx` CLI. Docker does not publish a Go client. |
 | `internal/driver/kubernetes/` | Kubernetes driver. Creates agent-sandbox `Sandbox` resources with the official v1beta1 types and runs commands with pod exec. |
@@ -21,46 +21,34 @@ The SDKs only trigger turns. The `brickie` engine (Go) executes them, either loc
 ## Requirements
 
 - Go 1.26 or newer to build the engine
-- Docker Desktop
+- Docker Desktop (local sandboxes are macOS-only today; Docker Sandboxes ships with Docker Desktop on macOS)
 - For local sandboxes: Homebrew (installs the `sbx` CLI)
 - For Kubernetes: `kind`, `kubectl`, `helm`
 - Node and pnpm for the TypeScript SDK and examples
 
-## Install the engine
+## Try it locally
 
-```bash
-go install github.com/hatchet-dev/brickie/cmd/brickie@latest
-```
-
-Or build from this repository:
+Everything runs on your machine: sandboxes in Docker Sandboxes micro-VMs, orchestration in an embedded Hatchet engine. The only external traffic is Claude API calls.
 
 ```bash
 go build -o /usr/local/bin/brickie ./cmd/brickie
+brickie dev
+pnpm install                       # repo root — the examples use the workspace SDK
+cd examples/typescript && pnpm demo
 ```
 
-## Local mode
+`brickie dev` checks Docker Desktop, installs and signs in the `sbx` CLI, initializes the sandbox network policy, and authenticates Claude inside sandboxes. Every step is skipped once it holds, so re-running it is free; sign-in steps open a browser only the first time (`--claude-auth` forces Claude re-auth after a credential change). It ends with a summary of what runs where.
 
-Local mode uses an embedded Hatchet engine and Docker Sandboxes. No Hatchet Cloud account is needed.
+`pnpm demo` is an interactive session shell: each message you type runs as one durable `agent-turn` task in a fresh sandbox, plain text goes to Claude, `!command` runs a shell command, and every turn prints its snapshot id and a latency breakdown. `/restore <id>` forks a new sandbox from any earlier snapshot. The other examples (`pnpm command`, `pnpm prompt`, `pnpm harness`) are non-interactive end-to-end runs that finish with `e2e ok`.
 
-```bash
-brickie bootstrap-local
-```
+How placement works: when `HATCHET_CLIENT_TOKEN` is not set, the SDK starts an embedded Hatchet engine (downloaded once and cached in `~/.hatchet`, with a bundled Postgres — the first run takes a minute) and spawns `brickie worker --driver local` as a sidecar. If the `brickie` binary is not on `PATH`, set `BRICKIE_BIN` to its location. When `HATCHET_CLIENT_TOKEN` is set, the SDK starts nothing and turns are orchestrated by that Hatchet instance instead — sandboxes still run wherever a provider is running. If your shell has `HATCHET_CLIENT_TLS_ROOT_CA_FILE` set, unset it before targeting a hosted instance.
 
-This installs the `sbx` CLI, signs in to Docker, initializes the sandbox network policy, and logs Claude in inside sandboxes. It opens a browser for the sign-in steps.
+Local security model:
 
-Run the TypeScript examples:
-
-```bash
-cd examples/typescript
-pnpm install
-pnpm command    # shell commands only, no LLM
-pnpm prompt     # Claude turns with snapshot chaining and forks
-pnpm harness    # Claude Agent SDK harness as a user-defined sandbox function
-```
-
-When `HATCHET_CLIENT_TOKEN` is not set, the SDK starts an embedded Hatchet engine and spawns `brickie worker --driver local` as a sidecar. If the binary is not on `PATH`, set `BRICKIE_BIN` to its location.
-
-A successful run prints `session result: {...}` followed by `e2e ok`.
+- Sandboxes are Docker Sandboxes micro-VMs. The per-turn workspace directory is the only path shared with the host.
+- No environment variables from your machine are injected into local sandboxes (`--credentials` applies to the Kubernetes driver only). Claude authenticates via the credential stored inside the sandbox agent kit by `brickie dev`.
+- Snapshots are tars of the workspace under `~/.brickie/snapshots`, pruned after 7 days.
+- In local mode, `image` selects an sbx template (built from the Docker Sandboxes base image), not an arbitrary container image; on Kubernetes it is a container image. Omit it locally to use the default Claude template.
 
 ## Kubernetes mode
 
@@ -75,7 +63,7 @@ cd examples/typescript && pnpm k8s
 
 `bootstrap-kind` creates the kind cluster, builds the provider image from the root `Dockerfile`, loads it into the cluster, and installs the Helm chart. If agent-sandbox is already installed on the cluster, the subchart is skipped.
 
-When `HATCHET_CLIENT_TOKEN` is set, the SDK does not start anything. It triggers `brickie-sandbox` tasks and the provider registered in the tenant runs them. The provider creates one `Sandbox` pod per turn, restores the snapshot, runs the turn, saves the new snapshot, and deletes the pod. The default sandbox image is `alpine:3`. Use `--sandbox-image` to change it.
+When `HATCHET_CLIENT_TOKEN` is set, the SDK does not start anything. It triggers `brickie-sandbox` tasks and the provider registered in the tenant runs them. The provider claims a pod from a per-image warm pool for each turn, restores the snapshot into it when the turn continues from one, runs the turn, checkpoints the workspace, and releases the pod. The default sandbox image is `alpine:3`. Use `--image` (`BRICKIE_SANDBOX_IMAGE`) to change it.
 
 If you develop hatchet locally with mkcert, run `unset HATCHET_CLIENT_TLS_ROOT_CA_FILE` before connecting to Hatchet Cloud. Otherwise the gRPC connection fails with a TLS error.
 
@@ -134,9 +122,14 @@ To verify a sandbox is running under gVisor, run a command turn with `dmesg | he
 | `--snapshot-dir` | `BRICKIE_SNAPSHOT_DIR` | `~/.brickie/snapshots` |
 | `--turn-timeout` | `BRICKIE_TURN_TIMEOUT` | `15m` |
 | `--context` | `BRICKIE_KUBE_CONTEXT` | current context or in-cluster |
-| `--slots` | | `10` |
+| `--slots` | `BRICKIE_SLOTS` | `10` |
+| `--object-store` | `BRICKIE_OBJECT_STORE` | none |
+| `--overlay` | `BRICKIE_OVERLAY` | `false` |
+| `--gvisor` | `BRICKIE_GVISOR` | `auto` |
+| `--injector`, `--injector-secret`, `--injector-image` | `BRICKIE_INJECTOR*` | disabled |
+| `--warm-images`, `--warm-replicas` | `BRICKIE_WARM_IMAGES`, `BRICKIE_WARM_REPLICAS` | none, `2` |
 
-`--credentials` is a comma-separated list of environment variable names. The Kubernetes driver copies those variables from the worker process into each sandbox pod. Nothing else from the worker environment is passed through.
+`--credentials` is a comma-separated list of environment variable names. The Kubernetes driver copies those variables from the worker process into each sandbox pod (sealed by the injector when it is enabled). The local driver ignores it: local sandboxes receive no host environment variables by design.
 
 ## Other SDKs
 
@@ -204,6 +197,6 @@ Set `BRICKIE_OTEL=false` to disable tracing on either side. Log lines always flo
 
 ## Snapshots
 
-A snapshot is a gzipped tar of the workspace, stored by the provider under `--snapshot-dir` and named after the run id of the turn that produced it. Snapshots are immutable. Retried turns overwrite their own snapshot, so replays are safe.
+A snapshot is a gzipped tar of the workspace, stored by the provider under `--snapshot-dir` and named after the run id of the turn that produced it. Snapshots are immutable. Retried turns overwrite their own snapshot, so replays are safe. Local snapshots older than 7 days are pruned when the provider starts.
 
-The provider stores snapshots on its own filesystem. Run one provider replica until an object storage backend is added.
+With `--object-store` (`s3://`, `gs://`, `azblob://`), snapshots are offloaded to object storage with the local directory acting as a cache, and multiple provider replicas can share them. On Kubernetes with the CSI driver enabled, snapshots are overlayfs layers checkpointed on the node instead of tars.

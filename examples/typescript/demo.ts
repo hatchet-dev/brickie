@@ -2,7 +2,7 @@ import * as readline from 'node:readline/promises';
 import { initClient } from './client.js';
 import '@hatchet/sandbox';
 
-const CLAUDE_IMAGE = process.env.DEMO_CLAUDE_IMAGE ?? '643285090708.dkr.ecr.us-east-2.amazonaws.com/brickie:claude-code-0.1.0';
+const CLAUDE_IMAGE = process.env.DEMO_CLAUDE_IMAGE;
 
 const sec = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
 
@@ -21,13 +21,12 @@ async function main() {
   process.env.HATCHET_CLIENT_LOG_LEVEL = process.env.HATCHET_CLIENT_LOG_LEVEL ?? 'ERROR';
   const hatchet = await initClient();
 
-
-
   const turn = hatchet.durableTask({
     name: 'agent-turn',
     executionTimeout: '5m',
     fn: async (input: { message: string; from?: string }, ctx) => {
-      const claude = hatchet.sandbox({ image: CLAUDE_IMAGE });
+      const shell = hatchet.sandbox();
+      const claude = hatchet.sandbox(CLAUDE_IMAGE ? { image: CLAUDE_IMAGE } : {});
       const opts = input.from ? { from: input.from } : {};
       if (input.message.startsWith('!')) {
         return shell.executeCommand(ctx, input.message.slice(1), opts);

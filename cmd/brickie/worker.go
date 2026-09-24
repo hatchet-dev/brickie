@@ -132,7 +132,9 @@ func runProvider(ctx context.Context, c providerConfig) error {
 	if err != nil {
 		return err
 	}
-	var store engine.SnapshotStore = engine.FSSnapshotStore{Dir: c.snapshotDir}
+	local := engine.FSSnapshotStore{Dir: c.snapshotDir}
+	local.Prune(7 * 24 * time.Hour)
+	var store engine.SnapshotStore = local
 	if c.objectStore != "" {
 		remote, err := overlay.NewBucketStore(ctx, c.objectStore)
 		if err != nil {

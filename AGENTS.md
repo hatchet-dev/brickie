@@ -4,7 +4,7 @@ brickie runs agent sandboxes as Hatchet durable tasks. Read `docs/ARCHITECTURE.m
 
 ## Layout
 
-- `cmd/brickie/`: cobra CLI (`worker`, `csi-node`, `injector`, `bootstrap-local`, `bootstrap-kind`, `bootstrap-aws`)
+- `cmd/brickie/`: cobra CLI (`dev`, plus hidden `worker`, `csi-node`, `injector`, `bootstrap-kind`, `bootstrap-aws`)
 - `internal/awsboot/`: EKS bootstrap via aws-sdk-go-v2 (cluster, nodegroup, IAM, ECR, S3, gVisor installer)
 - `internal/engine/`: turn contract, durable task, snapshot store
 - `internal/driver/`: `local` (Docker Sandboxes via `sbx` CLI) and `kubernetes` (agent-sandbox CRs plus pod exec)
@@ -42,6 +42,6 @@ Build binaries to /tmp or use `go install`, do not commit binaries.
 
 ## Environment notes
 
-- `sbx` (Docker Sandboxes) needs `sbx login` and `sbx policy init` once; `brickie bootstrap-local` handles it.
+- `sbx` (Docker Sandboxes) needs `sbx login` and `sbx policy init` once; `brickie dev` handles it.
 - When targeting Hatchet Cloud from a dev machine that has local hatchet mkcert setup, `unset HATCHET_CLIENT_TLS_ROOT_CA_FILE` first.
 - Claude spawned by the Agent SDK inside an sbx sandbox derives its working directory as the parent of the workspace mount. Always anchor prompts with the workspace path, as `internal/engine/runner.go` does.

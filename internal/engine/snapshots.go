@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/hatchet-dev/brickie/internal/overlay"
 )
@@ -30,6 +32,25 @@ func DefaultSnapshotDir() string {
 
 func (s FSSnapshotStore) Read(id string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(s.Dir, id+".tar.gz"))
+}
+
+// Prune deletes snapshot tars older than maxAge so local turns do not
+// accumulate workspace archives forever.
+func (s FSSnapshotStore) Prune(maxAge time.Duration) {
+	entries, err := os.ReadDir(s.Dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-maxAge)
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || info.IsDir() || !strings.HasSuffix(e.Name(), ".tar.gz") {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(s.Dir, e.Name()))
+		}
+	}
 }
 
 func (s FSSnapshotStore) Write(id string, tar []byte) error {

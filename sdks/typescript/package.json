@@ -15,10 +15,10 @@
     "@opentelemetry/sdk-trace-base": "^2.0.0"
   },
   "peerDependencies": {
-    "@hatchet-dev/typescript-sdk": ">=1.29.1"
+    "@hatchet-dev/typescript-sdk": ">=1.33.1"
   },
   "devDependencies": {
-    "@hatchet-dev/typescript-sdk": "^1.29.1",
+    "@hatchet-dev/typescript-sdk": "^1.33.1",
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0"
   }

@@ -104,7 +104,7 @@ One Helm chart (`helm/brickie`) installs:
 - the agent-sandbox controller and CRDs as a vendored subchart, skippable when the cluster already has them,
 - the CSI node DaemonSet, off by default.
 
-`brickie bootstrap-kind` produces a working local cluster from nothing. `brickie bootstrap-local` configures Docker Sandboxes for laptop use without any cluster.
+`brickie bootstrap-kind` produces a working local cluster from nothing. `brickie dev` configures Docker Sandboxes for laptop use without any cluster.
 
 ## Roadmap
 

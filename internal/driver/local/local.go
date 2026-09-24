@@ -61,7 +61,7 @@ func sbx(ctx context.Context, args ...string) (string, error) {
 		detail := res.Stderr + res.Stdout
 		switch {
 		case notAuthenticated.MatchString(detail):
-			return "", errors.New("Docker Sandboxes is not authenticated: run `sbx login` (or `brickie bootstrap-local`) and retry")
+			return "", errors.New("Docker Sandboxes is not authenticated: run `sbx login` (or `brickie dev`) and retry")
 		case kitFailure.MatchString(detail):
 			return "", errors.New("Docker Sandboxes could not apply the agent kit to this image: `image` must be an sbx template built from the Docker Sandboxes base image, not an arbitrary Docker image")
 		}
@@ -103,6 +103,11 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		}
 	}
 
+	timings := map[string]int64{}
+	phase := func(name string, start time.Time) {
+		timings[name] = time.Since(start).Milliseconds()
+	}
+	createStart := time.Now()
 	createArgs := []string{"create", d.Agent, "--name", req.SandboxName, "-q"}
 	if req.Image != "" {
 		createArgs = append(createArgs, "-t", req.Image)
@@ -111,6 +116,7 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	if _, err := sbx(ctx, createArgs...); err != nil {
 		return engine.TurnResponse{}, err
 	}
+	phase("claim", createStart)
 	req.Logf("sbx sandbox %s created", req.SandboxName)
 	defer func() {
 		_, _ = runSbx(context.Background(), "rm", "-f", req.SandboxName)
@@ -143,6 +149,9 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		if res.ExitCode != 0 {
 			return engine.TurnResponse{}, fmt.Errorf("claude failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr+res.Stdout))
 		}
+		if apiMs := engine.ParsePromptAPIMs(res.Stdout); apiMs > 0 {
+			timings["llm"] = apiMs
+		}
 		output = engine.PromptOutput{Reply: engine.ParsePromptReply(res.Stdout), Files: listFiles(workspace)}
 	default:
 		if req.FnSource == "" {
@@ -164,12 +173,14 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		output = json.RawMessage(raw)
 	}
 
+	phase("exec", execStart)
 	req.Logf("fn %s executed in %s", req.Fn, time.Since(execStart).Round(time.Millisecond))
 	outJSON, err := json.Marshal(output)
 	if err != nil {
 		return engine.TurnResponse{}, err
 	}
 	_ = os.RemoveAll(ctrl)
+	checkpointStart := time.Now()
 	outTar := filepath.Join(dir, "out.tar.gz")
 	if out, err := exec.CommandContext(ctx, "tar", "-czf", outTar, "-C", workspace, ".").CombinedOutput(); err != nil {
 		return engine.TurnResponse{}, fmt.Errorf("snapshot workspace: %s", out)
@@ -178,5 +189,6 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	if err != nil {
 		return engine.TurnResponse{}, err
 	}
-	return engine.TurnResponse{Output: outJSON, SnapshotTar: snapshot}, nil
+	phase("checkpoint", checkpointStart)
+	return engine.TurnResponse{Output: outJSON, SnapshotTar: snapshot, Timings: timings}, nil
 }
