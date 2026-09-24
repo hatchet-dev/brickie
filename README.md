@@ -16,14 +16,13 @@ hack/run-demo.sh
 
 The script is a guided setup. It explains each step and asks before running it. It sets up Docker Sandboxes, starts Hatchet with docker compose, saves a token into `.env`, builds and starts the provider, and opens the demo session.
 
-In the demo, every message runs as one durable turn in a fresh sandbox:
+The demo is one long-lived durable task, `agent-session`. It waits for each message, runs a turn in a fresh sandbox, and carries the snapshot to the next turn:
 
 - `<text>` runs a Claude turn. The conversation carries across turns.
 - `!<command>` runs a shell command.
-- `/restore <id>` forks a new sandbox from any earlier snapshot.
 - `/exit` ends the session.
 
-Each turn prints its snapshot ID and a latency breakdown. The dashboard at [http://localhost:8888](http://localhost:8888) (`admin@example.com` / `Admin123!!`) shows every run. The demo source is `examples/typescript/demo.ts`.
+Each turn prints its snapshot ID and a latency breakdown. The dashboard at [http://localhost:8888](http://localhost:8888) (`admin@example.com` / `Admin123!!`) shows the session run and every turn under it. The demo source is `examples/typescript/demo.ts`.
 
 ## TypeScript SDK
 
@@ -55,7 +54,7 @@ Every method returns `{ output, snapshotId, timings }`:
 
 Pass `{ from: snapshotId }` to continue from a snapshot. Passing the same `from` twice forks it. Omit it for an empty workspace.
 
-An interactive session is just a durable task per message that threads the last snapshot id as `from`. `examples/typescript/demo.ts` is the reference: a `hatchet.durableTask` whose body calls `hatchet.sandbox()`, and a REPL that calls `turn.run({ message, from })`.
+An interactive session is one long-lived `hatchet.durableTask`. Its body loops: `ctx.waitForEvent` for the next message, `hatchet.sandbox()` for the turn, then `ctx.putStream` with the result. The client pushes messages with `hatchet.events.push` and reads results with `hatchet.runs.subscribeToStream`. `examples/typescript/demo.ts` is the reference.
 
 When `HATCHET_CLIENT_TOKEN` is set, the SDK talks to that Hatchet instance and the provider executes the turns. When it is unset, the SDK starts an embedded Hatchet engine and the provider itself, so a bare program still runs with nothing else installed.
 

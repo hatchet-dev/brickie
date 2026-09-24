@@ -4,15 +4,8 @@ set -euo pipefail
 # A guided setup from zero to an agent session. Every state-changing command
 # is explained and confirmed before it runs. Safe to re-run any time: steps
 # that already hold are skipped. Set BRICKIE_YES=1 to skip all prompts.
-#
-# Usage: hack/run-demo.sh [demo|session]
-#   demo    (default) one durable turn per message
-#   session one long-lived durable task, every turn inside it
 
 cd "$(dirname "$0")/.."
-
-DEMO_SCRIPT="demo"
-[ "${1:-}" = "session" ] && DEMO_SCRIPT="demo:session"
 
 TENANT_ID=707d0855-80ab-4e1f-a156-f1c4546cbf52
 STATE_DIR="$HOME/.brickie"
@@ -223,4 +216,4 @@ EOF
 fi
 cd examples/typescript
 unset HATCHET_CLIENT_TLS_ROOT_CA_FILE HATCHET_CLIENT_TLS_STRATEGY
-exec pnpm "$DEMO_SCRIPT"
+exec pnpm demo
