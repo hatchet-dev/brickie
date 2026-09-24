@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -64,8 +65,8 @@ func LoadConversation(workspaceDir string) []ConversationTurn {
 func AppendConversation(workspaceDir, user, assistant string) error {
 	turns := append(LoadConversation(workspaceDir), ConversationTurn{User: user, Assistant: assistant})
 	total := 0
-	for i := len(turns) - 1; i >= 0; i-- {
-		total += len(turns[i].User) + len(turns[i].Assistant)
+	for i, turn := range slices.Backward(turns) {
+		total += len(turn.User) + len(turn.Assistant)
 		if total > maxConversationChars {
 			turns = turns[i+1:]
 			break
