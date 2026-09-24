@@ -1,6 +1,6 @@
 # brickie
 
-Agent sandboxes as Hatchet durable tasks. Every agent turn runs as a Hatchet durable task inside its own Docker Sandboxes micro-VM. Each turn ends with an immutable workspace snapshot. Later turns can resume or fork any snapshot, files and conversation included.
+Agent sandboxes as Hatchet durable tasks. A sandbox is a Docker Sandboxes micro-VM. Every agent turn runs inside it as a Hatchet task and ends with an immutable workspace snapshot. The session that drives the turns is a durable task. Any snapshot can start a new sandbox, so you can resume or fork a session at any turn, files and conversation included.
 
 ## Requirements
 
@@ -16,10 +16,11 @@ hack/run-demo.sh
 
 The script is a guided setup. It explains each step and asks before running it. It sets up Docker Sandboxes, starts Hatchet with docker compose, saves a token into `.env`, builds and starts the provider, and opens the demo session.
 
-The demo is one long-lived durable task, `agent-session`, with one sandbox that lives for the whole session. It waits for each message and runs the turn inside that same sandbox:
+The demo is one long-lived durable task, `agent-session`, with one sandbox for the whole session. It waits for each message and runs the turn inside that sandbox:
 
 - `<text>` runs a Claude turn. The conversation carries across turns.
 - `!<command>` runs a shell command.
+- `/restore <snapshot-id>` replaces the sandbox with a new one forked from that snapshot.
 - `/exit` ends the session.
 
 Each turn prints its snapshot ID and a latency breakdown. The dashboard at [http://localhost:8888](http://localhost:8888) (`admin@example.com` / `Admin123!!`) shows the session run and every turn under it. The demo source is `examples/typescript/demo.ts`.
@@ -47,21 +48,17 @@ const session = hatchet.durableTask({
 });
 ```
 
-`hatchet.sandbox()` is one sandbox. Every call on the handle runs in that same micro-VM, so files and state carry from turn to turn. Each turn is still a durable task and still ends with a snapshot.
+`hatchet.sandbox()` is one sandbox. Every call on the handle runs in that same micro-VM, so files and state carry from turn to turn. Each turn is a Hatchet task and ends with a snapshot. The sandbox is created on the first turn, not when the handle is made.
+
+By default the sandbox uses the Docker Sandboxes template for the `claude` agent, which has the Claude CLI, Node, git, and a shell. `hatchet.sandbox({ image })` picks another sbx template.
 
 Every method returns `{ output, snapshotId, timings }`:
 
 - `executeCommand(ctx, cmd)` runs a shell command. Output is `{ stdout, stderr, exitCode }`. A non-zero exit does not fail the turn.
 - `executePrompt(ctx, prompt)` runs one Claude turn. Output is `{ reply, files }`.
 - `createFunction(name, fn)` registers a JavaScript function that runs inside the sandbox. Call it with `.run(ctx, input)`.
-- `executeAll(ctx, items)` runs several turns as one durable step.
+- `executeAll(ctx, items)` runs several turns as one durable step. On one sandbox they run in order.
 - `destroy(ctx)` removes the sandbox. Sandboxes idle for 15 minutes are removed anyway (`--sandbox-idle-ttl` on the provider).
-
-`hatchet.sandbox({ from: snapshotId })` starts a new sandbox from a snapshot. Two handles with the same `from` are a fork.
-
-An interactive session is one long-lived `hatchet.durableTask`. Its body loops: `ctx.waitForEvent` for the next message, `hatchet.sandbox()` for the turn, then `ctx.putStream` with the result. The client pushes messages with `hatchet.events.push` and reads results with `hatchet.runs.subscribeToStream`. `examples/typescript/demo.ts` is the reference.
-
-When `HATCHET_CLIENT_TOKEN` is set, the SDK talks to that Hatchet instance and the provider executes the turns. When it is unset, the SDK starts an embedded Hatchet engine and the provider itself, so a bare program still runs with nothing else installed.
 
 ## Using an external Hatchet instance
 

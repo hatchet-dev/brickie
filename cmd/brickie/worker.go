@@ -78,7 +78,7 @@ func runProvider(ctx context.Context, c providerConfig) error {
 		return err
 	}
 	task := engine.NewProviderTask(client, opts)
-	w, err := client.NewWorker("brickie-provider", hatchet.WithWorkflows(task), hatchet.WithDurableSlots(c.slots))
+	w, err := client.NewWorker("brickie-provider", hatchet.WithWorkflows(task), hatchet.WithSlots(c.slots))
 	if err != nil {
 		return err
 	}

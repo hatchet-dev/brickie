@@ -19,8 +19,6 @@ function breakdown(totalMs: number, timings: Record<string, number> = {}) {
 async function main() {
   const hatchet = await initClient();
 
-  // One long-lived durable task is the whole session, and one sandbox lives
-  // for the whole session: every turn runs inside the same micro-VM.
   const session = hatchet.durableTask({
     name: 'agent-session',
     executionTimeout: '2h',

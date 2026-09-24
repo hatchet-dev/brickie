@@ -100,7 +100,7 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 
 func NewProviderTask(client *hatchet.Client, opts ProviderOpts) *hatchet.StandaloneTask {
 	runner := newTurnRunner(opts)
-	return client.NewStandaloneDurableTask(TaskName, func(ctx hatchet.DurableContext, input TurnInput) (TurnResult, error) {
+	return client.NewStandaloneTask(TaskName, func(ctx hatchet.Context, input TurnInput) (TurnResult, error) {
 		runID := ctx.WorkflowRunId()
 		log := func(msg string) {
 			fmt.Fprintf(os.Stderr, "brickie: [%s] %s\n", runID, msg)
