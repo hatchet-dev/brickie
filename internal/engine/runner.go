@@ -60,8 +60,6 @@ func ParsePromptReply(stdout string) string {
 	return reply
 }
 
-// ParsePromptAPIMs extracts the time claude spent in Anthropic API calls from
-// its JSON output, 0 when absent.
 func ParsePromptAPIMs(stdout string) int64 {
 	var parsed struct {
 		DurationAPIMs int64 `json:"duration_api_ms"`

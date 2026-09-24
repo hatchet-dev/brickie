@@ -140,8 +140,8 @@ func runDev(ctx context.Context, claudeAuth bool) error {
 }
 
 func devSummary(tokenSet bool) string {
-	hatchetLine := "  hatchet      no HATCHET_CLIENT_TOKEN set — an embedded engine runs in ~/.hatchet;"
-	hatchetDetail := "               nothing leaves this machine except Claude API calls"
+	hatchetLine := "  hatchet      no HATCHET_CLIENT_TOKEN set — run `docker compose up -d` and mint one (README quickstart);"
+	hatchetDetail := "               without a token the SDK falls back to an embedded engine in ~/.hatchet"
 	if tokenSet {
 		hatchetLine = "  hatchet      HATCHET_CLIENT_TOKEN is set — turns orchestrate through that instance;"
 		hatchetDetail = "               sandboxes still run only on this machine"

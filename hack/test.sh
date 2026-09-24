@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# End-to-end test of the brickie provider against a running Hatchet instance.
-# The tenant must have SERVER_GRPC_OPERATORS_ENABLED=true.
-# Usage: HATCHET_CLIENT_TOKEN=... hack/test.sh [--full]
-# (--full also runs the Claude Agent SDK harness example; needs sbx claude auth)
+# End-to-end check: the demo session runs one shell turn through a running
+# Hatchet instance (docker compose up -d) and the local sandbox provider.
+# Usage: HATCHET_CLIENT_TOKEN=... hack/test.sh
 # Against a local TLS-less engine, also set HATCHET_CLIENT_TLS_STRATEGY=none.
 
 cd "$(dirname "$0")/.."
-ROOT=$(pwd)
-WORKDIR=$(mktemp -d /tmp/brickie-operator-test.XXXXXX)
-FULL=${1:-}
+WORKDIR=$(mktemp -d /tmp/brickie-test.XXXXXX)
 
 for bin in go pnpm sbx node; do
   command -v "$bin" >/dev/null || { echo "error: $bin is required" >&2; exit 1; }
@@ -33,8 +30,8 @@ trap cleanup EXIT
 echo "==> building brickie"
 go build -o "$WORKDIR/brickie" ./cmd/brickie
 
-echo "==> starting provider in operator mode (local driver)"
-BRICKIE_OTEL=false "$WORKDIR/brickie" worker --driver local --slots 5 \
+echo "==> starting provider in operator mode"
+BRICKIE_OTEL=false "$WORKDIR/brickie" worker --slots 5 \
   > "$WORKDIR/provider.log" 2>&1 &
 PROVIDER_PID=$!
 
@@ -51,29 +48,15 @@ if ! grep -q "connected as grpc operator" "$WORKDIR/provider.log"; then
 fi
 echo "    $(grep 'connected as grpc operator' "$WORKDIR/provider.log")"
 
-cd examples/typescript
 [ -d node_modules ] || pnpm install --silent
+cd examples/typescript
 
-echo "==> running command example"
-BRICKIE_OTEL=false npx tsx command.ts > "$WORKDIR/command.log" 2>&1 || {
-  echo "error: command example failed" >&2; tail -15 "$WORKDIR/command.log" >&2; exit 1; }
-grep -q "e2e ok" "$WORKDIR/command.log"
+echo "==> running one demo session turn"
+printf '!echo e2e ok\n/exit\n' | BRICKIE_OTEL=false npx tsx demo.ts > "$WORKDIR/demo.log" 2>&1 || {
+  echo "error: demo session failed" >&2; tail -15 "$WORKDIR/demo.log" >&2; exit 1; }
+grep -q "e2e ok" "$WORKDIR/demo.log"
+grep -q "session ended after 1 turns" "$WORKDIR/demo.log"
 echo "    e2e ok"
 
-SNAPSHOT_ID=$(grep -o '"snapshotId": "[a-f0-9-]*"' "$WORKDIR/command.log" | head -1 | cut -d'"' -f4)
-echo "==> running resume example (snapshot $SNAPSHOT_ID)"
-BRICKIE_OTEL=false SNAPSHOT_ID="$SNAPSHOT_ID" npx tsx resume.ts > "$WORKDIR/resume.log" 2>&1 || {
-  echo "error: resume example failed" >&2; tail -15 "$WORKDIR/resume.log" >&2; exit 1; }
-grep -q "restore ok" "$WORKDIR/resume.log"
-echo "    restore ok"
-
-if [ "$FULL" = "--full" ]; then
-  echo "==> running agent harness example (this takes a few minutes)"
-  BRICKIE_OTEL=false npx tsx harness.ts > "$WORKDIR/harness.log" 2>&1 || {
-    echo "error: harness example failed" >&2; tail -15 "$WORKDIR/harness.log" >&2; exit 1; }
-  grep -q "e2e ok" "$WORKDIR/harness.log"
-  echo "    e2e ok"
-fi
-
 echo
-echo "PASS: unchanged SDK examples served by the provider ($ROOT)"
+echo "PASS"

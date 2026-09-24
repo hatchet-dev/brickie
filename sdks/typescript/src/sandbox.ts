@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
-import { Duration, DurableContext, HatchetClient, JsonObject } from '@hatchet-dev/typescript-sdk/v1';
-import type { SandboxBackend } from './backend.js';
+import { DurableContext, HatchetClient, JsonObject } from '@hatchet-dev/typescript-sdk/v1';
 import { setupTelemetry } from './otel.js';
 
 export const SANDBOX_TASK_NAME = 'brickie-sandbox';
@@ -29,9 +28,6 @@ export type SandboxFn = (
 
 export interface SandboxOpts {
   image?: string;
-  backend?: SandboxBackend;
-  credentials?: string[];
-  turnTimeout?: Duration;
 }
 
 export interface ExecuteOpts {
@@ -56,7 +52,7 @@ function ensureLocalProvider(hatchet: HatchetClient) {
   sidecarStarted = true;
   const bin = process.env.BRICKIE_BIN ?? 'brickie';
   const cfg = hatchet.config;
-  const child = spawn(bin, ['worker', '--driver', 'local'], {
+  const child = spawn(bin, ['worker'], {
     stdio: ['ignore', 'inherit', 'inherit'],
     env: {
       ...process.env,
@@ -72,31 +68,6 @@ function ensureLocalProvider(hatchet: HatchetClient) {
     );
   });
   process.on('exit', () => child.kill());
-}
-
-const backendProvidersStarted = new Set<string>();
-
-function ensureBackendProvider(
-  hatchet: HatchetClient,
-  backend: SandboxBackend,
-  credentials: string[],
-  turnTimeout?: Duration
-) {
-  if (backendProvidersStarted.has(backend.name)) {
-    return;
-  }
-  backendProvidersStarted.add(backend.name);
-  void (async () => {
-    await setupTelemetry();
-    const { runTurnOnBackend } = await import('./backend.js');
-    const task = hatchet.durableTask<SandboxTurnInput, TurnResult>({
-      name: SANDBOX_TASK_NAME,
-      executionTimeout: turnTimeout ?? '15m',
-      fn: (turn, ctx) => runTurnOnBackend(backend, turn, credentials, (message) => void ctx.log(message)),
-    });
-    const worker = await hatchet.worker(`brickie-${backend.name}-provider`, { workflows: [task] });
-    void worker.start();
-  })();
 }
 
 export type Sandbox = ReturnType<typeof sandbox>;
@@ -121,11 +92,7 @@ function nextKey(ctx: object) {
 
 export function sandbox(hatchet: HatchetClient, opts: SandboxOpts = {}) {
   void setupTelemetry();
-  if (opts.backend) {
-    ensureBackendProvider(hatchet, opts.backend, opts.credentials ?? [], opts.turnTimeout);
-  } else {
-    ensureLocalProvider(hatchet);
-  }
+  ensureLocalProvider(hatchet);
 
   const turn = (fn: string, input: JsonObject, from?: string, fnSource?: string): SandboxTurnInput => ({
     ...(opts.image ? { image: opts.image } : {}),

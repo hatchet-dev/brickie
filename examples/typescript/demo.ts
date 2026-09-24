@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import * as readline from 'node:readline/promises';
 import { initClient } from './client.js';
 import '@hatchet/sandbox';
@@ -9,7 +10,7 @@ const sec = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
 function breakdown(totalMs: number, timings: Record<string, number> = {}) {
   const { claim = 0, restore = 0, exec = 0, checkpoint = 0, llm = 0 } = timings;
   const parts = [`total ${sec(totalMs)}`];
-  if (claim) parts.push(`pod ${sec(claim + restore)}`);
+  if (claim) parts.push(`sandbox ${sec(claim + restore)}`);
   if (exec) parts.push(llm ? `agent ${sec(exec - llm)} · llm ${sec(llm)}` : `run ${sec(exec)}`);
   if (checkpoint) parts.push(`snapshot ${sec(checkpoint)}`);
   const hatchet = totalMs - claim - restore - exec - checkpoint;
@@ -21,31 +22,71 @@ async function main() {
   process.env.HATCHET_CLIENT_LOG_LEVEL = process.env.HATCHET_CLIENT_LOG_LEVEL ?? 'ERROR';
   const hatchet = await initClient();
 
-  const turn = hatchet.durableTask({
-    name: 'agent-turn',
-    executionTimeout: '5m',
-    fn: async (input: { message: string; from?: string }, ctx) => {
+  const session = hatchet.durableTask({
+    name: 'agent-session',
+    executionTimeout: '2h',
+    fn: async (input: { sessionId: string }, ctx) => {
       const shell = hatchet.sandbox();
       const claude = hatchet.sandbox(CLAUDE_IMAGE ? { image: CLAUDE_IMAGE } : {});
-      const opts = input.from ? { from: input.from } : {};
-      if (input.message.startsWith('!')) {
-        return shell.executeCommand(ctx, input.message.slice(1), opts);
+      let snapshot: string | undefined;
+      let turns = 0;
+      for (;;) {
+        const ev = await ctx.waitForEvent('session-message', undefined, undefined, input.sessionId);
+        const message = String((ev as any).message ?? '');
+        if (message === '/exit') break;
+        if (message.startsWith('/restore ')) {
+          snapshot = message.split(/\s+/)[1];
+          await ctx.putStream(JSON.stringify({ info: `next turn restores snapshot ${snapshot} into a fresh sandbox` }));
+          continue;
+        }
+        const opts = snapshot ? { from: snapshot } : {};
+        const result = message.startsWith('!')
+          ? await shell.executeCommand(ctx, message.slice(1), opts)
+          : await claude.executePrompt(ctx, message, opts);
+        snapshot = result.snapshotId;
+        turns += 1;
+        await ctx.putStream(JSON.stringify({ output: result.output, snapshotId: snapshot, timings: result.timings }));
       }
-      return claude.executePrompt(ctx, input.message, opts);
+      return { turns, snapshotId: snapshot };
     },
   });
 
-  const worker = await hatchet.worker('demo-worker', { workflows: [turn] });
+  const worker = await hatchet.worker('demo-worker', { workflows: [session] });
   void worker.start();
 
-  console.log('brickie session shell — every message runs one durable turn in a fresh sandbox on your cluster');
-  console.log('  <text>         agent turn (Claude in its own sandbox image)');
-  console.log('  !<command>     shell turn (alpine sandbox)');
+  const sessionId = randomUUID();
+  const ref = await session.runNoWait({ sessionId });
+  const runId = await ref.getWorkflowRunId();
+
+  const replies: any[] = [];
+  let wakeup: (() => void) | undefined;
+  void (async () => {
+    for await (const chunk of hatchet.runs.subscribeToStream(runId)) {
+      try {
+        replies.push(JSON.parse(chunk));
+      } catch {
+        continue;
+      }
+      wakeup?.();
+    }
+  })();
+  const nextReply = async () => {
+    while (replies.length === 0) {
+      await new Promise<void>((resolve) => {
+        wakeup = resolve;
+      });
+    }
+    return replies.shift();
+  };
+
+  console.log('brickie session — one durable agent-session task; every message is a turn in a fresh sandbox');
+  console.log('  <text>         agent turn (Claude)');
+  console.log('  !<command>     shell turn');
   console.log('  /restore <id>  continue from any snapshot in a new sandbox');
-  console.log('  /exit          quit\n');
+  console.log('  /exit          end the session\n');
+  console.log(`session run ${runId}\n`);
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  let snapshot: string | undefined;
   const clock = () => new Date().toLocaleTimeString('en-US', { hour12: false });
   const ask = async () => {
     const prompt = () => `[${clock()}] you> `;
@@ -60,25 +101,30 @@ async function main() {
     }
   };
 
+  const send = (message: string) => hatchet.events.push('session-message', { message }, { scope: sessionId });
+
   for (;;) {
     const line = (await ask()).trim();
     if (!line) continue;
-    if (line === '/exit') break;
-    if (line.startsWith('/restore ')) {
-      snapshot = line.split(/\s+/)[1];
-      console.log(`next turn restores snapshot ${snapshot} into a fresh sandbox\n`);
-      continue;
+    if (line === '/exit') {
+      await send('/exit');
+      break;
     }
     const started = Date.now();
-    const result = await turn.run({ message: line, ...(snapshot ? { from: snapshot } : {}) });
-    const total = Date.now() - started;
-    const out = result.output as any;
+    await send(line);
+    const reply = await nextReply();
+    if (reply.info) {
+      console.log(`${reply.info}\n`);
+      continue;
+    }
+    const out = reply.output ?? {};
     console.log(out.reply ?? out.stdout ?? '');
     if (out.stderr) console.log(out.stderr);
-    snapshot = result.snapshotId;
-    console.log(`(snapshot ${snapshot} · ${breakdown(total, (result as any).timings)})\n`);
+    console.log(`(snapshot ${reply.snapshotId} · ${breakdown(Date.now() - started, reply.timings)})\n`);
   }
 
+  const summary = await ref.output;
+  console.log(`session ended after ${(summary as any).turns} turns`);
   rl.close();
   await worker.stop();
   await hatchet.stopEmbedded?.();

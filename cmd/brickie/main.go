@@ -12,10 +12,9 @@ func main() {
 		Short: "Agent sandboxes as durable tasks. Run `brickie dev` to try it on this machine.",
 	}
 	root.AddCommand(devCmd())
-	for _, hidden := range []*cobra.Command{workerCmd(), csiCmd(), injectorCmd(), bootstrapKindCmd(), bootstrapAWSCmd()} {
-		hidden.Hidden = true
-		root.AddCommand(hidden)
-	}
+	worker := workerCmd()
+	worker.Hidden = true
+	root.AddCommand(worker)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}

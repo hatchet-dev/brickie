@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/hatchet-dev/hatchet/pkg/cmdutils"
@@ -14,11 +13,8 @@ import (
 	hatchetotel "github.com/hatchet-dev/hatchet/sdks/go/opentelemetry"
 	"github.com/spf13/cobra"
 
-	"github.com/hatchet-dev/brickie/internal/driver/kubernetes"
 	"github.com/hatchet-dev/brickie/internal/driver/local"
 	"github.com/hatchet-dev/brickie/internal/engine"
-	"github.com/hatchet-dev/brickie/internal/injector"
-	"github.com/hatchet-dev/brickie/internal/overlay"
 )
 
 func envOr(key, fallback string) string {
@@ -29,23 +25,13 @@ func envOr(key, fallback string) string {
 }
 
 type providerConfig struct {
-	driver         string
-	namespace      string
-	image          string
-	credentials    string
-	snapshotDir    string
-	objectStore    string
-	kubeContext    string
-	turnTimeout    time.Duration
-	slots          int
-	overlay        bool
-	injector       bool
-	injectorSecret string
-	injectorImage  string
-	gvisor         string
-	warmImages     string
-	warmReplicas   int
+	driver      string
+	snapshotDir string
+	turnTimeout time.Duration
+	slots       int
 }
+
+var providerCfg providerConfig
 
 func (c providerConfig) registerFlags(cmd *cobra.Command) {
 	defaultTimeout := 15 * time.Minute
@@ -54,14 +40,10 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 			defaultTimeout = d
 		}
 	}
-	cmd.Flags().StringVar(&providerCfg.driver, "driver", envOr("BRICKIE_DRIVER", "local"), "sandbox driver: local (Docker Sandboxes) or kubernetes")
-	cmd.Flags().StringVar(&providerCfg.namespace, "namespace", envOr("BRICKIE_SANDBOX_NAMESPACE", "default"), "kubernetes namespace for sandboxes")
-	cmd.Flags().StringVar(&providerCfg.image, "image", envOr("BRICKIE_SANDBOX_IMAGE", ""), "default sandbox image")
-	cmd.Flags().StringVar(&providerCfg.credentials, "credentials", envOr("BRICKIE_CREDENTIALS", ""), "comma-separated env var names to inject into sandboxes")
+	cmd.Flags().StringVar(&providerCfg.driver, "driver", "local", "sandbox driver (only local is supported)")
+	_ = cmd.Flags().MarkHidden("driver")
 	cmd.Flags().StringVar(&providerCfg.snapshotDir, "snapshot-dir", envOr("BRICKIE_SNAPSHOT_DIR", engine.DefaultSnapshotDir()), "snapshot storage directory")
-	cmd.Flags().StringVar(&providerCfg.objectStore, "object-store", envOr("BRICKIE_OBJECT_STORE", ""), "object store URL for turn snapshots: s3://, gs://, azblob://, or s3:// with ?endpoint= for any S3-compatible store")
 	cmd.Flags().DurationVar(&providerCfg.turnTimeout, "turn-timeout", defaultTimeout, "execution timeout per sandbox turn")
-	cmd.Flags().StringVar(&providerCfg.kubeContext, "context", envOr("BRICKIE_KUBE_CONTEXT", ""), "kubeconfig context (kubernetes driver)")
 	defaultSlots := 10
 	if v := os.Getenv("BRICKIE_SLOTS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -69,85 +51,20 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 		}
 	}
 	cmd.Flags().IntVar(&providerCfg.slots, "slots", defaultSlots, "concurrent sandbox turns")
-	cmd.Flags().BoolVar(&providerCfg.overlay, "overlay", os.Getenv("BRICKIE_OVERLAY") == "true", "use overlayfs workspaces via the brickie CSI driver (kubernetes driver only)")
-	cmd.Flags().BoolVar(&providerCfg.injector, "injector", os.Getenv("BRICKIE_INJECTOR") == "true", "run the credential injector sidecar in sandbox pods and seal credentials instead of injecting raw values")
-	cmd.Flags().StringVar(&providerCfg.injectorSecret, "injector-secret", envOr("BRICKIE_INJECTOR_SECRET", ""), "kubernetes Secret holding BRICKIE_INJECTOR_PUBLIC_KEY and BRICKIE_INJECTOR_PRIVATE_KEY")
-	cmd.Flags().StringVar(&providerCfg.injectorImage, "injector-image", envOr("BRICKIE_INJECTOR_IMAGE", ""), "image for the injector sidecar (usually the brickie image)")
-	cmd.Flags().StringVar(&providerCfg.gvisor, "gvisor", envOr("BRICKIE_GVISOR", "auto"), "run sandbox pods under gVisor: auto (use when the gvisor runtime class exists), on, or off (kubernetes driver)")
-	cmd.Flags().StringVar(&providerCfg.warmImages, "warm-images", envOr("BRICKIE_WARM_IMAGES", ""), "comma-separated images to pre-create warm pools for at startup (kubernetes driver; other images get pools on first use)")
-	defaultWarmReplicas := 2
-	if v := os.Getenv("BRICKIE_WARM_REPLICAS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			defaultWarmReplicas = n
-		}
-	}
-	cmd.Flags().IntVar(&providerCfg.warmReplicas, "warm-replicas", defaultWarmReplicas, "warm sandbox pods kept ready per image pool (kubernetes driver)")
-}
-
-var providerCfg providerConfig
-
-func (c providerConfig) buildDriver() (engine.Driver, error) {
-	switch c.driver {
-	case "local":
-		return local.New(), nil
-	case "kubernetes":
-		creds := []string{}
-		for name := range strings.SplitSeq(c.credentials, ",") {
-			if name = strings.TrimSpace(name); name != "" {
-				creds = append(creds, name)
-			}
-		}
-		if err := injector.ExtendCatalog(os.Getenv("BRICKIE_INJECTOR_CATALOG")); err != nil {
-			return nil, err
-		}
-		warmImages := []string{}
-		for name := range strings.SplitSeq(c.warmImages, ",") {
-			if name = strings.TrimSpace(name); name != "" {
-				warmImages = append(warmImages, name)
-			}
-		}
-		return kubernetes.New(kubernetes.Options{
-			Context:      c.kubeContext,
-			Namespace:    c.namespace,
-			Image:        c.image,
-			Credentials:  creds,
-			Overlay:      c.overlay,
-			GVisor:       c.gvisor,
-			WarmImages:   warmImages,
-			WarmReplicas: c.warmReplicas,
-			Injector: kubernetes.InjectorOptions{
-				Enabled:    c.injector,
-				SecretName: c.injectorSecret,
-				Image:      c.injectorImage,
-				PublicKey:  os.Getenv("BRICKIE_INJECTOR_PUBLIC_KEY"),
-			},
-		})
-	default:
-		return nil, fmt.Errorf("unknown driver %q (local|kubernetes)", c.driver)
-	}
 }
 
 func runProvider(ctx context.Context, c providerConfig) error {
-	driver, err := c.buildDriver()
-	if err != nil {
-		return err
+	if c.driver != "local" {
+		return fmt.Errorf("unknown driver %q: only local Docker Sandboxes are supported", c.driver)
 	}
-	local := engine.FSSnapshotStore{Dir: c.snapshotDir}
-	local.Prune(7 * 24 * time.Hour)
-	var store engine.SnapshotStore = local
-	if c.objectStore != "" {
-		remote, err := overlay.NewBucketStore(ctx, c.objectStore)
-		if err != nil {
-			return err
-		}
-		store = engine.ObjectSnapshotStore{Cache: engine.FSSnapshotStore{Dir: c.snapshotDir}, Remote: remote}
-		fmt.Fprintf(os.Stderr, "brickie: turn snapshots offloaded to object store\n")
-	}
-	err = engine.RunOperatorProvider(ctx, engine.ProviderOpts{
-		Driver:      driver,
+	store := engine.FSSnapshotStore{Dir: c.snapshotDir}
+	store.Prune(7 * 24 * time.Hour)
+	opts := engine.ProviderOpts{
+		Driver:      local.New(),
 		Store:       store,
 		TurnTimeout: c.turnTimeout,
-	}, c.slots)
+	}
+	err := engine.RunOperatorProvider(ctx, opts, c.slots)
 	if !errors.Is(err, engine.ErrOperatorUnavailable) {
 		return err
 	}
@@ -156,11 +73,7 @@ func runProvider(ctx context.Context, c providerConfig) error {
 	if err != nil {
 		return err
 	}
-	task := engine.NewProviderTask(client, engine.ProviderOpts{
-		Driver:      driver,
-		Store:       store,
-		TurnTimeout: c.turnTimeout,
-	})
+	task := engine.NewProviderTask(client, opts)
 	w, err := client.NewWorker("brickie-provider", hatchet.WithWorkflows(task), hatchet.WithDurableSlots(c.slots))
 	if err != nil {
 		return err
@@ -176,7 +89,7 @@ func runProvider(ctx context.Context, c providerConfig) error {
 			}()
 		}
 	}
-	fmt.Fprintf(os.Stderr, "brickie: sandbox provider started (driver=%s)\n", c.driver)
+	fmt.Fprintf(os.Stderr, "brickie: sandbox provider started\n")
 	return w.StartBlocking(ctx)
 }
 
