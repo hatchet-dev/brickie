@@ -114,7 +114,16 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	}
 	createArgs = append(createArgs, workspace)
 	if _, err := sbx(ctx, createArgs...); err != nil {
-		return engine.TurnResponse{}, err
+		if !strings.Contains(err.Error(), "already exists") {
+			return engine.TurnResponse{}, err
+		}
+		if _, err := runSbx(ctx, "rm", "-f", req.SandboxName); err != nil {
+			return engine.TurnResponse{}, err
+		}
+		req.Logf("removed leftover sandbox %s from an interrupted attempt", req.SandboxName)
+		if _, err := sbx(ctx, createArgs...); err != nil {
+			return engine.TurnResponse{}, err
+		}
 	}
 	phase("claim", createStart)
 	req.Logf("sbx sandbox %s created", req.SandboxName)

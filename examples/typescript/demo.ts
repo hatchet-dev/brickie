@@ -95,7 +95,7 @@ async function main() {
       rl.prompt(true);
     }, 1000);
     try {
-      return await rl.question(prompt());
+      return await rl.question(prompt()).catch(() => new Promise<string>(() => {}));
     } finally {
       clearInterval(tick);
     }
@@ -103,12 +103,31 @@ async function main() {
 
   const send = (message: string) => hatchet.events.push('session-message', { message }, { scope: sessionId });
 
+  const endSession = async () => {
+    await send('/exit');
+    const summary = await ref.output;
+    console.log(`session ended after ${(summary as any).turns} turns`);
+    rl.close();
+    await worker.stop();
+    await hatchet.stopEmbedded?.();
+    process.exit(0);
+  };
+
+  let interrupted = false;
+  rl.on('SIGINT', () => {
+    if (interrupted) {
+      process.exit(130);
+    }
+    interrupted = true;
+    console.log('\nending session (ctrl+c again to force quit)');
+    void endSession();
+  });
+
   for (;;) {
     const line = (await ask()).trim();
     if (!line) continue;
     if (line === '/exit') {
-      await send('/exit');
-      break;
+      await endSession();
     }
     const started = Date.now();
     await send(line);
@@ -122,13 +141,6 @@ async function main() {
     if (out.stderr) console.log(out.stderr);
     console.log(`(snapshot ${reply.snapshotId} · ${breakdown(Date.now() - started, reply.timings)})\n`);
   }
-
-  const summary = await ref.output;
-  console.log(`session ended after ${(summary as any).turns} turns`);
-  rl.close();
-  await worker.stop();
-  await hatchet.stopEmbedded?.();
-  process.exit(0);
 }
 
 main().catch((err) => {

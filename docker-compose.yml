@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: hatchet
       POSTGRES_DB: hatchet
     volumes:
-      - brickie_postgres_data:/var/lib/postgresql/data
+      - brickie_postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d hatchet -U hatchet"]
       interval: 10s
