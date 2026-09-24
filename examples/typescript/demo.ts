@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import * as readline from 'node:readline/promises';
 import '@hatchet/sandbox';
+import type { Sandbox } from '@hatchet/sandbox';
 import { initClient } from './client.js';
 
 const sec = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
@@ -24,22 +25,23 @@ async function main() {
     executionTimeout: '2h',
     fn: async (input: { sessionId: string }, ctx) => {
       const opts = process.env.DEMO_TEMPLATE ? { template: process.env.DEMO_TEMPLATE } : {};
-      let sandbox = await hatchet.sandbox.create(ctx, opts);
+      let sandbox: Sandbox | undefined;
       for (;;) {
         const { message } = await ctx.waitForEvent('turn', `input.sessionId == '${input.sessionId}'`);
         const text = String(message);
         if (text === '/exit') {
-          await sandbox.kill();
+          await sandbox?.kill();
           return { done: true };
         }
         if (text.startsWith('/restore ')) {
           const from = text.split(/\s+/)[1];
-          await sandbox.kill();
+          await sandbox?.kill();
           sandbox = await hatchet.sandbox.create(ctx, { ...opts, from });
           await ctx.putStream(JSON.stringify({ info: `new sandbox ${sandbox.sandboxId} forked from snapshot ${from}` }));
           continue;
         }
-        const result = text.startsWith('!') ? await sandbox.commands.run(text.slice(1)) : await sandbox.prompt(text);
+        sandbox ??= await hatchet.sandbox.create(ctx, opts);
+        const result = text.startsWith('!') ? await sandbox.exec(text.slice(1)) : await sandbox.prompt(text);
         await ctx.putStream(JSON.stringify(result));
       }
     },
@@ -60,7 +62,7 @@ async function main() {
 
   const end = async () => {
     await hatchet.events.push('turn', { sessionId, message: '/exit' });
-    await ref.output;
+    await ref.output.catch((err) => console.error(`session failed: ${err?.message ?? err}`));
     rl.close();
     await worker.stop();
     await hatchet.stopEmbedded?.();
@@ -81,7 +83,15 @@ async function main() {
 
     const started = Date.now();
     await hatchet.events.push('turn', { sessionId, message: line });
-    const result = JSON.parse((await stream.next()).value);
+    const next = await stream.next();
+    if (next.done) {
+      if (!interrupted) {
+        console.log('session ended');
+        await end();
+      }
+      return;
+    }
+    const result = JSON.parse(next.value);
     if (result.info) {
       console.log(`${result.info}\n`);
       continue;

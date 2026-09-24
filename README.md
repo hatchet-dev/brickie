@@ -51,7 +51,7 @@ const session = hatchet.durableTask({
   fn: async (input, ctx) => {
     const sandbox = await hatchet.sandbox.create(ctx);
     await sandbox.prompt('create haiku.txt with a haiku');
-    const haiku = await sandbox.commands.run('cat haiku.txt');
+    const haiku = await sandbox.exec('cat haiku.txt');
 
     const fork = await hatchet.sandbox.create(ctx, { from: haiku.snapshotId });
     await fork.prompt('make it darker');
@@ -71,7 +71,7 @@ const session = hatchet.durableTask({
 
 ### Use the sandbox
 
-- `sandbox.commands.run(cmd)` runs a shell command. It returns `{ stdout, stderr, exitCode }`. A non-zero exit code does not cause an error.
+- `sandbox.exec(cmd)` runs a shell command. It returns `{ stdout, stderr, exitCode }`. A non-zero exit code does not cause an error.
 - `sandbox.prompt(text)` runs one Claude turn. It returns `{ reply, files }`. Claude keeps the conversation between turns.
 - `sandbox.kill()` removes the sandbox. The provider also removes a sandbox after 15 minutes without a turn. Set `--sandbox-idle-ttl` on the provider to change this time.
 

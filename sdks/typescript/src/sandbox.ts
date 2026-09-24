@@ -58,14 +58,12 @@ function nextSandboxId(ctx: Ctx) {
 }
 
 export class Sandbox {
-  readonly commands: { run: (cmd: string) => Promise<CommandResult> };
 
   private constructor(
     private readonly ctx: Ctx,
     readonly sandboxId: string,
     private readonly opts: SandboxOpts
   ) {
-    this.commands = { run: (cmd) => this.turn<CommandResult>('$command', { cmd }) };
   }
 
   static async create(ctx: Ctx, opts: SandboxOpts = {}): Promise<Sandbox> {
@@ -73,6 +71,10 @@ export class Sandbox {
     const sandbox = new Sandbox(ctx, nextSandboxId(ctx), opts);
     await sandbox.turn('$create', {});
     return sandbox;
+  }
+
+  async exec(cmd: string): Promise<CommandResult> {
+    return this.turn<CommandResult>('$command', { cmd });
   }
 
   async prompt(text: string): Promise<PromptResult> {

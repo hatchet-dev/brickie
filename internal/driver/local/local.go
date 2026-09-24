@@ -69,14 +69,7 @@ type execResult struct {
 }
 
 func runSbx(ctx context.Context, args ...string) (execResult, error) {
-	return runSbxIn(ctx, nil, args...)
-}
-
-func runSbxIn(ctx context.Context, stdin []byte, args ...string) (execResult, error) {
 	cmd := exec.CommandContext(ctx, "sbx", args...)
-	if stdin != nil {
-		cmd.Stdin = bytes.NewReader(stdin)
-	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -233,10 +226,15 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	}
 
 	// The snapshot tar is agent-influenced, so it is extracted inside the
-	// sandbox: a hostile entry can only unpack within the micro-VM.
+	// sandbox: a hostile entry can only unpack within the micro-VM. The tar is
+	// handed over through the workspace mount rather than stdin.
 	if created && req.SnapshotTar != nil {
 		restoreStart := time.Now()
-		res, err := runSbxIn(ctx, req.SnapshotTar, "exec", "-w", workspace, req.SandboxName, "tar", "-xzf", "-", "-C", workspace)
+		const tarName = ".brickie-restore.tar.gz"
+		if err := os.WriteFile(filepath.Join(workspace, tarName), req.SnapshotTar, 0o600); err != nil {
+			return engine.TurnResponse{}, err
+		}
+		res, err := runSbx(ctx, "exec", "-w", workspace, req.SandboxName, "sh", "-c", "tar -xzf "+tarName+" -C . && rm -f "+tarName)
 		if err != nil {
 			return engine.TurnResponse{}, fmt.Errorf("restore snapshot: %w", err)
 		}
