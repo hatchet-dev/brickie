@@ -6,8 +6,10 @@ export const SANDBOX_TASK_NAME = 'brickie-sandbox';
 
 const COMMAND_FN = '$command';
 const PROMPT_FN = '$prompt';
+const DESTROY_FN = '$destroy';
 
 export interface SandboxTurnInput extends JsonObject {
+  sandboxId: string;
   image?: string;
   fn: string;
   fnSource?: string;
@@ -28,18 +30,17 @@ export type SandboxFn = (
 
 export interface SandboxOpts {
   image?: string;
+  from?: string;
 }
 
 export interface ExecuteOpts {
-  from?: string;
   key?: string;
 }
 
-export type ExecuteItem = { from?: string } & (
+export type ExecuteItem =
   | { command: string }
   | { prompt: string }
-  | { fn: string; fnSource: string; input?: JsonObject }
-);
+  | { fn: string; fnSource: string; input?: JsonObject };
 
 type Ctx = DurableContext<any>;
 
@@ -83,6 +84,7 @@ HatchetClient.prototype.sandbox = function (this: HatchetClient, opts: SandboxOp
 };
 
 const turnSeq = new WeakMap<object, number>();
+const sandboxSeq = new WeakMap<object, number>();
 
 function nextKey(ctx: object) {
   const n = turnSeq.get(ctx) ?? 0;
@@ -90,19 +92,32 @@ function nextKey(ctx: object) {
   return `sbx-${n}`;
 }
 
+// Sandbox ids derive from the run id and creation order, so a replayed run
+// rebuilds the same ids and its turns land in the same live sandboxes.
+function nextSandboxId(ctx: Ctx) {
+  const n = sandboxSeq.get(ctx) ?? 0;
+  sandboxSeq.set(ctx, n + 1);
+  return `${ctx.workflowRunId()}-${n}`;
+}
+
 export function sandbox(hatchet: HatchetClient, opts: SandboxOpts = {}) {
   void setupTelemetry();
   ensureLocalProvider(hatchet);
 
-  const turn = (fn: string, input: JsonObject, from?: string, fnSource?: string): SandboxTurnInput => ({
+  let id: string | undefined;
+  const sandboxId = (ctx: Ctx) => (id ??= nextSandboxId(ctx));
+
+  const turn = (ctx: Ctx, fn: string, input: JsonObject, fnSource?: string): SandboxTurnInput => ({
+    sandboxId: sandboxId(ctx),
     ...(opts.image ? { image: opts.image } : {}),
     fn,
     ...(fnSource ? { fnSource } : {}),
     input,
-    ...(from ? { snapshotId: from } : {}),
+    ...(opts.from ? { snapshotId: opts.from } : {}),
   });
 
   const turnMetadata = (turnInput: SandboxTurnInput): Record<string, string> => ({
+    'brickie.sandbox': turnInput.sandboxId,
     'brickie.fn': turnInput.fn,
     ...(turnInput.image ? { 'brickie.image': turnInput.image } : {}),
     ...(turnInput.snapshotId ? { 'brickie.from': turnInput.snapshotId } : {}),
@@ -114,14 +129,14 @@ export function sandbox(hatchet: HatchetClient, opts: SandboxOpts = {}) {
       additionalMetadata: turnMetadata(turnInput),
     });
 
-  const itemToTurn = (item: ExecuteItem): SandboxTurnInput => {
+  const itemToTurn = (ctx: Ctx, item: ExecuteItem): SandboxTurnInput => {
     if ('command' in item) {
-      return turn(COMMAND_FN, { cmd: item.command }, item.from);
+      return turn(ctx, COMMAND_FN, { cmd: item.command });
     }
     if ('prompt' in item) {
-      return turn(PROMPT_FN, { prompt: item.prompt }, item.from);
+      return turn(ctx, PROMPT_FN, { prompt: item.prompt });
     }
-    return turn(item.fn, item.input ?? {}, item.from, item.fnSource);
+    return turn(ctx, item.fn, item.input ?? {}, item.fnSource);
   };
 
   return {
@@ -131,17 +146,17 @@ export function sandbox(hatchet: HatchetClient, opts: SandboxOpts = {}) {
         name,
         fnSource,
         run: (ctx: Ctx, input: JsonObject = {}, execOpts: ExecuteOpts = {}): Promise<TurnResult> =>
-          spawnTurn(ctx, turn(name, input, execOpts.from, fnSource), execOpts.key),
+          spawnTurn(ctx, turn(ctx, name, input, fnSource), execOpts.key),
       };
     },
     executeCommand: (ctx: Ctx, command: string, execOpts: ExecuteOpts = {}): Promise<TurnResult> =>
-      spawnTurn(ctx, turn(COMMAND_FN, { cmd: command }, execOpts.from), execOpts.key),
+      spawnTurn(ctx, turn(ctx, COMMAND_FN, { cmd: command }), execOpts.key),
     executePrompt: (ctx: Ctx, prompt: string, execOpts: ExecuteOpts = {}): Promise<TurnResult> =>
-      spawnTurn(ctx, turn(PROMPT_FN, { prompt }, execOpts.from), execOpts.key),
+      spawnTurn(ctx, turn(ctx, PROMPT_FN, { prompt }), execOpts.key),
     executeAll: (ctx: Ctx, items: ExecuteItem[]): Promise<TurnResult[]> =>
       ctx.spawnChildren<SandboxTurnInput, TurnResult>(
         items.map((item) => {
-          const turnInput = itemToTurn(item);
+          const turnInput = itemToTurn(ctx, item);
           return {
             workflow: SANDBOX_TASK_NAME,
             input: turnInput,
@@ -149,5 +164,7 @@ export function sandbox(hatchet: HatchetClient, opts: SandboxOpts = {}) {
           };
         })
       ),
+    destroy: (ctx: Ctx, execOpts: ExecuteOpts = {}): Promise<TurnResult> =>
+      spawnTurn(ctx, turn(ctx, DESTROY_FN, {}), execOpts.key),
   };
 }

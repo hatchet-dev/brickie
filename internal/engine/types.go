@@ -11,9 +11,11 @@ const TaskName = "brickie-sandbox"
 const (
 	CommandFn = "$command"
 	PromptFn  = "$prompt"
+	DestroyFn = "$destroy"
 )
 
 type TurnInput struct {
+	SandboxID  string          `json:"sandboxId,omitempty"`
 	Image      string          `json:"image,omitempty"`
 	Fn         string          `json:"fn"`
 	FnSource   string          `json:"fnSource,omitempty"`

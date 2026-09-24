@@ -16,7 +16,7 @@ hack/run-demo.sh
 
 The script is a guided setup. It explains each step and asks before running it. It sets up Docker Sandboxes, starts Hatchet with docker compose, saves a token into `.env`, builds and starts the provider, and opens the demo session.
 
-The demo is one long-lived durable task, `agent-session`. It waits for each message, runs a turn in a fresh sandbox, and carries the snapshot to the next turn:
+The demo is one long-lived durable task, `agent-session`, with one sandbox that lives for the whole session. It waits for each message and runs the turn inside that same sandbox:
 
 - `<text>` runs a Claude turn. The conversation carries across turns.
 - `!<command>` runs a shell command.
@@ -35,24 +35,29 @@ const session = hatchet.durableTask({
   fn: async (input, ctx) => {
     const sbx = hatchet.sandbox();
     const t1 = await sbx.executePrompt(ctx, 'create haiku.txt with a haiku');
-    const t2 = await sbx.executeCommand(ctx, 'cat haiku.txt', { from: t1.snapshotId });
-    const [a, b] = await sbx.executeAll(ctx, [
-      { prompt: 'make it darker', from: t2.snapshotId },
-      { prompt: 'make it funnier', from: t2.snapshotId },
-    ]);
-    return { a, b };
+    const t2 = await sbx.executeCommand(ctx, 'cat haiku.txt');
+
+    const fork = hatchet.sandbox({ from: t2.snapshotId });
+    const t3 = await fork.executePrompt(ctx, 'make it darker');
+
+    await sbx.destroy(ctx);
+    await fork.destroy(ctx);
+    return { t2, t3 };
   },
 });
 ```
 
+`hatchet.sandbox()` is one sandbox. Every call on the handle runs in that same micro-VM, so files and state carry from turn to turn. Each turn is still a durable task and still ends with a snapshot.
+
 Every method returns `{ output, snapshotId, timings }`:
 
-- `executeCommand(ctx, cmd, opts?)` runs a shell command. Output is `{ stdout, stderr, exitCode }`. A non-zero exit does not fail the turn.
-- `executePrompt(ctx, prompt, opts?)` runs one Claude turn. Output is `{ reply, files }`.
-- `createFunction(name, fn)` registers a JavaScript function that runs inside the sandbox. Call it with `.run(ctx, input, opts?)`.
-- `executeAll(ctx, items)` runs several turns in parallel as one durable step.
+- `executeCommand(ctx, cmd)` runs a shell command. Output is `{ stdout, stderr, exitCode }`. A non-zero exit does not fail the turn.
+- `executePrompt(ctx, prompt)` runs one Claude turn. Output is `{ reply, files }`.
+- `createFunction(name, fn)` registers a JavaScript function that runs inside the sandbox. Call it with `.run(ctx, input)`.
+- `executeAll(ctx, items)` runs several turns as one durable step.
+- `destroy(ctx)` removes the sandbox. Sandboxes idle for 15 minutes are removed anyway (`--sandbox-idle-ttl` on the provider).
 
-Pass `{ from: snapshotId }` to continue from a snapshot. Passing the same `from` twice forks it. Omit it for an empty workspace.
+`hatchet.sandbox({ from: snapshotId })` starts a new sandbox from a snapshot. Two handles with the same `from` are a fork.
 
 An interactive session is one long-lived `hatchet.durableTask`. Its body loops: `ctx.waitForEvent` for the next message, `hatchet.sandbox()` for the turn, then `ctx.putStream` with the result. The client pushes messages with `hatchet.events.push` and reads results with `hatchet.runs.subscribeToStream`. `examples/typescript/demo.ts` is the reference.
 

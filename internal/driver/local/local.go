@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hatchet-dev/brickie/internal/engine"
@@ -21,12 +22,44 @@ var (
 	kitFailure       = regexp.MustCompile(`(?i)failed to apply kit`)
 )
 
-type Driver struct {
-	Agent string
+type liveSandbox struct {
+	mu       sync.Mutex
+	dir      string
+	lastUsed time.Time
 }
 
-func New() *Driver {
-	return &Driver{Agent: "claude"}
+type Driver struct {
+	Agent   string
+	IdleTTL time.Duration
+
+	mu   sync.Mutex
+	live map[string]*liveSandbox
+}
+
+// New returns a driver whose sandboxes are destroyed after idleTTL without a turn.
+func New(idleTTL time.Duration) *Driver {
+	if idleTTL <= 0 {
+		idleTTL = 15 * time.Minute
+	}
+	d := &Driver{Agent: "claude", IdleTTL: idleTTL, live: map[string]*liveSandbox{}}
+	d.pruneOrphans()
+	go d.reap()
+	return d
+}
+
+// pruneOrphans removes brickie sandboxes left by a previous provider process;
+// their workspace directories died with that process, so they cannot be reused.
+func (d *Driver) pruneOrphans() {
+	res, err := runSbx(context.Background(), "ls")
+	if err != nil || res.ExitCode != 0 {
+		return
+	}
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		name := strings.Fields(line)
+		if len(name) > 0 && strings.HasPrefix(name[0], "brickie-") {
+			_, _ = runSbx(context.Background(), "rm", "-f", name[0])
+		}
+	}
 }
 
 type execResult struct {
@@ -89,49 +122,119 @@ func listFiles(dir string) []string {
 	return engine.FilterFiles(names)
 }
 
-func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.TurnResponse, error) {
-	dir, err := os.MkdirTemp("", req.SandboxName+"-")
+// acquire returns the live sandbox for a name, creating it on first use. A
+// sandbox left behind by a previous provider process is replaced, since its
+// workspace directory is gone with that process.
+func (d *Driver) acquire(ctx context.Context, name, image string) (*liveSandbox, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if sb, ok := d.live[name]; ok {
+		return sb, false, nil
+	}
+	dir, err := os.MkdirTemp("", name+"-")
 	if err != nil {
-		return engine.TurnResponse{}, err
+		return nil, false, err
 	}
-	defer os.RemoveAll(dir)
 	workspace := filepath.Join(dir, "workspace")
-	ctrl := filepath.Join(workspace, ".brickie")
-	if err := os.MkdirAll(ctrl, 0o755); err != nil {
-		return engine.TurnResponse{}, err
+	if err := os.MkdirAll(workspace, 0o750); err != nil {
+		return nil, false, err
 	}
-	timings := map[string]int64{}
-	phase := func(name string, start time.Time) {
-		timings[name] = time.Since(start).Milliseconds()
-	}
-	createStart := time.Now()
-	createArgs := []string{"create", d.Agent, "--name", req.SandboxName, "-q"}
-	if req.Image != "" {
-		createArgs = append(createArgs, "-t", req.Image)
+	createArgs := []string{"create", d.Agent, "--name", name, "-q"}
+	if image != "" {
+		createArgs = append(createArgs, "-t", image)
 	}
 	createArgs = append(createArgs, workspace)
 	if _, err := sbx(ctx, createArgs...); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
-			return engine.TurnResponse{}, err
+			_ = os.RemoveAll(dir)
+			return nil, false, err
 		}
-		if _, err := runSbx(ctx, "rm", "-f", req.SandboxName); err != nil {
-			return engine.TurnResponse{}, err
+		if _, err := runSbx(ctx, "rm", "-f", name); err != nil {
+			_ = os.RemoveAll(dir)
+			return nil, false, err
 		}
-		req.Logf("removed leftover sandbox %s from an interrupted attempt", req.SandboxName)
 		if _, err := sbx(ctx, createArgs...); err != nil {
-			return engine.TurnResponse{}, err
+			_ = os.RemoveAll(dir)
+			return nil, false, err
 		}
 	}
-	phase("claim", createStart)
-	req.Logf("sbx sandbox %s created", req.SandboxName)
-	defer func() {
-		_, _ = runSbx(context.Background(), "rm", "-f", req.SandboxName)
-		req.Logf("sbx sandbox %s removed", req.SandboxName)
-	}()
+	sb := &liveSandbox{dir: dir, lastUsed: time.Now()}
+	d.live[name] = sb
+	return sb, true, nil
+}
+
+func (d *Driver) destroy(name string) {
+	d.mu.Lock()
+	sb, ok := d.live[name]
+	delete(d.live, name)
+	d.mu.Unlock()
+	_, _ = runSbx(context.Background(), "rm", "-f", name)
+	if ok {
+		_ = os.RemoveAll(sb.dir)
+	}
+}
+
+func (d *Driver) reap() {
+	for range time.Tick(time.Minute) {
+		d.mu.Lock()
+		var idle []string
+		for name, sb := range d.live {
+			if time.Since(sb.lastUsed) > d.IdleTTL {
+				idle = append(idle, name)
+			}
+		}
+		d.mu.Unlock()
+		for _, name := range idle {
+			d.destroy(name)
+		}
+	}
+}
+
+// Close destroys every live sandbox; called when the provider shuts down.
+func (d *Driver) Close() {
+	d.mu.Lock()
+	names := make([]string, 0, len(d.live))
+	for name := range d.live {
+		names = append(names, name)
+	}
+	d.mu.Unlock()
+	for _, name := range names {
+		d.destroy(name)
+	}
+}
+
+// RunTurn executes one turn in the sandbox named by the request, creating it on first use.
+func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.TurnResponse, error) {
+	if req.Fn == engine.DestroyFn {
+		d.destroy(req.SandboxName)
+		req.Logf("sbx sandbox %s destroyed", req.SandboxName)
+		return engine.TurnResponse{Output: json.RawMessage(`{"destroyed":true}`)}, nil
+	}
+
+	timings := map[string]int64{}
+	phase := func(name string, start time.Time) {
+		timings[name] = time.Since(start).Milliseconds()
+	}
+
+	claimStart := time.Now()
+	sb, created, err := d.acquire(ctx, req.SandboxName, req.Image)
+	if err != nil {
+		return engine.TurnResponse{}, err
+	}
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	sb.lastUsed = time.Now()
+	phase("claim", claimStart)
+	workspace := filepath.Join(sb.dir, "workspace")
+	if created {
+		req.Logf("sbx sandbox %s created", req.SandboxName)
+	} else {
+		req.Logf("sbx sandbox %s reused", req.SandboxName)
+	}
 
 	// The snapshot tar is agent-influenced, so it is extracted inside the
 	// sandbox: a hostile entry can only unpack within the micro-VM.
-	if req.SnapshotTar != nil {
+	if created && req.SnapshotTar != nil {
 		restoreStart := time.Now()
 		res, err := runSbxIn(ctx, req.SnapshotTar, "exec", "-w", workspace, req.SandboxName, "tar", "-xzf", "-", "-C", workspace)
 		if err != nil {
@@ -183,20 +286,25 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		if req.FnSource == "" {
 			return engine.TurnResponse{}, fmt.Errorf("unknown sandbox fn %q and no fnSource provided", req.Fn)
 		}
-		if err := os.WriteFile(filepath.Join(ctrl, "runner.cjs"), []byte(engine.RunnerJS), 0o644); err != nil {
+		ctrl := filepath.Join(workspace, ".brickie")
+		if err := os.MkdirAll(ctrl, 0o750); err != nil {
 			return engine.TurnResponse{}, err
 		}
-		if err := os.WriteFile(filepath.Join(ctrl, "input.json"), engine.RunnerInput(req.FnSource, req.Input), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(ctrl, "runner.cjs"), []byte(engine.RunnerJS), 0o600); err != nil {
+			return engine.TurnResponse{}, err
+		}
+		if err := os.WriteFile(filepath.Join(ctrl, "input.json"), engine.RunnerInput(req.FnSource, req.Input), 0o600); err != nil {
 			return engine.TurnResponse{}, err
 		}
 		if _, err := sbx(ctx, "exec", "-w", workspace, req.SandboxName, "node", ".brickie/runner.cjs"); err != nil {
 			return engine.TurnResponse{}, err
 		}
-		raw, err := os.ReadFile(filepath.Join(ctrl, "output.json"))
+		raw, err := os.ReadFile(filepath.Join(ctrl, "output.json")) // #nosec G304 -- ctrl is the provider's own workspace directory
 		if err != nil {
 			return engine.TurnResponse{}, fmt.Errorf("read turn output: %w", err)
 		}
 		output = json.RawMessage(raw)
+		_ = os.RemoveAll(ctrl)
 	}
 
 	phase("exec", execStart)
@@ -205,13 +313,12 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	if err != nil {
 		return engine.TurnResponse{}, err
 	}
-	_ = os.RemoveAll(ctrl)
 	checkpointStart := time.Now()
-	outTar := filepath.Join(dir, "out.tar.gz")
+	outTar := filepath.Join(sb.dir, "out.tar.gz")
 	if out, err := exec.CommandContext(ctx, "tar", "-czf", outTar, "-C", workspace, ".").CombinedOutput(); err != nil {
 		return engine.TurnResponse{}, fmt.Errorf("snapshot workspace: %s", out)
 	}
-	snapshot, err := os.ReadFile(outTar)
+	snapshot, err := os.ReadFile(outTar) // #nosec G304 -- outTar is the provider's own temp file
 	if err != nil {
 		return engine.TurnResponse{}, err
 	}

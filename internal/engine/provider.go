@@ -52,8 +52,12 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		}
 		return TurnResult{}, fmt.Errorf("resolve image: %w", err)
 	}
+	sandboxID := input.SandboxID
+	if sandboxID == "" {
+		sandboxID = runID
+	}
 	req := TurnRequest{
-		SandboxName:  "brickie-" + runID,
+		SandboxName:  "brickie-" + sandboxID,
 		Image:        resolved.Ref,
 		Fn:           input.Fn,
 		FnSource:     input.FnSource,
@@ -79,6 +83,10 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		return TurnResult{}, err
 	}
 	req.Logf("driver finished in %s", time.Since(started).Round(time.Millisecond))
+	if resp.SnapshotTar == nil && !r.native {
+		req.Logf("turn done: no snapshot")
+		return TurnResult{Output: resp.Output, Timings: resp.Timings}, nil
+	}
 	if !r.native {
 		if err := r.opts.Store.Write(runID, resp.SnapshotTar); err != nil {
 			req.Logf("write snapshot %s failed: %v", runID, err)

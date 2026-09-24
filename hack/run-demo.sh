@@ -108,12 +108,6 @@ else
   docker compose up -d --wait
 fi
 
-if [ -z "$EXTERNAL_HATCHET" ]; then
-  docker compose exec -T postgres psql -U hatchet -q -c \
-    "update \"Worker\" set \"isActive\" = false where \"isActive\" and \"lastHeartbeatAt\" < now() - interval '30 seconds'" >/dev/null 2>&1 || true
-  ok "cleared any dead worker registrations"
-fi
-
 if [ -f .env ] && grep -q HATCHET_CLIENT_TOKEN .env; then
   ok "hatchet token is in .env"
 else

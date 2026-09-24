@@ -27,6 +27,7 @@ func envOr(key, fallback string) string {
 type providerConfig struct {
 	snapshotDir string
 	turnTimeout time.Duration
+	idleTTL     time.Duration
 	slots       int
 }
 
@@ -48,13 +49,22 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 		}
 	}
 	cmd.Flags().IntVar(&providerCfg.slots, "slots", defaultSlots, "concurrent sandbox turns")
+	defaultIdle := 15 * time.Minute
+	if v := os.Getenv("BRICKIE_SANDBOX_IDLE_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			defaultIdle = d
+		}
+	}
+	cmd.Flags().DurationVar(&providerCfg.idleTTL, "sandbox-idle-ttl", defaultIdle, "destroy a sandbox after this long without a turn")
 }
 
 func runProvider(ctx context.Context, c providerConfig) error {
 	store := engine.FSSnapshotStore{Dir: c.snapshotDir}
 	store.Prune(7 * 24 * time.Hour)
+	driver := local.New(c.idleTTL)
+	defer driver.Close()
 	opts := engine.ProviderOpts{
-		Driver:      local.New(),
+		Driver:      driver,
 		Store:       store,
 		TurnTimeout: c.turnTimeout,
 	}
