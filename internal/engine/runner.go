@@ -35,8 +35,16 @@ func LoadConversation(workspaceDir string) []ConversationTurn {
 		return nil
 	}
 	defer func() { _ = f.Close() }()
-	b, err := io.ReadAll(io.LimitReader(f, 4*maxConversationChars))
+	b, err := io.ReadAll(io.LimitReader(f, 4*maxConversationChars+1))
 	if err != nil {
+		return nil
+	}
+	return ParseConversation(b)
+}
+
+// ParseConversation decodes transcript bytes, empty when malformed or oversized.
+func ParseConversation(b []byte) []ConversationTurn {
+	if len(b) > 4*maxConversationChars {
 		return nil
 	}
 	var turns []ConversationTurn
@@ -46,10 +54,9 @@ func LoadConversation(workspaceDir string) []ConversationTurn {
 	return turns
 }
 
-// AppendConversation records one exchange, dropping the oldest entries once
-// the transcript exceeds the size cap.
-func AppendConversation(workspaceDir, user, assistant string) error {
-	turns := append(LoadConversation(workspaceDir), ConversationTurn{User: user, Assistant: assistant})
+// AppendTurn returns the transcript with one more exchange, oldest entries dropped past the size cap.
+func AppendTurn(turns []ConversationTurn, user, assistant string) []byte {
+	turns = append(turns, ConversationTurn{User: user, Assistant: assistant})
 	total := 0
 	for i, turn := range slices.Backward(turns) {
 		total += len(turn.User) + len(turn.Assistant)
@@ -58,10 +65,13 @@ func AppendConversation(workspaceDir, user, assistant string) error {
 			break
 		}
 	}
-	b, err := json.Marshal(turns)
-	if err != nil {
-		return err
-	}
+	b, _ := json.Marshal(turns)
+	return b
+}
+
+// AppendConversation records one exchange in a host-side workspace transcript.
+func AppendConversation(workspaceDir, user, assistant string) error {
+	b := AppendTurn(LoadConversation(workspaceDir), user, assistant)
 	path := filepath.Join(workspaceDir, ConversationFile)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err

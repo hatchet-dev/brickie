@@ -1,0 +1,10 @@
+apiVersion: v2
+name: brickie
+description: Hatchet sandbox provider - runs sandbox turns as durable Hatchet tasks on Kubernetes via agent-sandbox
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+dependencies:
+  - name: agent-sandbox
+    version: 0.1.0
+    condition: agent-sandbox.enabled

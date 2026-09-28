@@ -1,0 +1,95 @@
+{{- if not (or .Values.hatchet.token .Values.hatchet.existingSecret) }}
+{{- fail "HATCHET_CLIENT_TOKEN is required: set hatchet.token or hatchet.existingSecret (a Secret containing the HATCHET_CLIENT_TOKEN key)" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "brickie.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "brickie.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "brickie.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "brickie.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "brickie.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: BRICKIE_DRIVER
+              value: kubernetes
+            - name: BRICKIE_SANDBOX_NAMESPACE
+              value: {{ include "brickie.sandboxNamespace" . | quote }}
+            - name: BRICKIE_SANDBOX_IMAGE
+              value: {{ .Values.sandbox.image | quote }}
+            - name: BRICKIE_TURN_TIMEOUT
+              value: {{ .Values.sandbox.turnTimeout | quote }}
+            - name: BRICKIE_SANDBOX_IDLE_TTL
+              value: {{ .Values.sandbox.idleTTL | quote }}
+            - name: BRICKIE_RUNTIME
+              value: {{ .Values.sandbox.runtime | quote }}
+            {{- if .Values.sandbox.warmImages }}
+            - name: BRICKIE_WARM_IMAGES
+              value: {{ join "," .Values.sandbox.warmImages | quote }}
+            {{- end }}
+            - name: BRICKIE_WARM_REPLICAS
+              value: {{ .Values.sandbox.warmReplicas | quote }}
+            - name: BRICKIE_CREDENTIALS
+              value: {{ include "brickie.credentialNames" . | quote }}
+            {{- if .Values.objectStore }}
+            - name: BRICKIE_OBJECT_STORE
+              value: {{ .Values.objectStore | quote }}
+            {{- end }}
+            - name: BRICKIE_SNAPSHOT_DIR
+              value: /var/lib/brickie/snapshots
+            - name: BRICKIE_SLOTS
+              value: {{ .Values.slots | quote }}
+          envFrom:
+            {{- if or .Values.hatchet.token .Values.sandbox.credentials }}
+            - secretRef:
+                name: {{ include "brickie.fullname" . }}
+            {{- end }}
+            {{- if .Values.hatchet.existingSecret }}
+            - secretRef:
+                name: {{ .Values.hatchet.existingSecret }}
+            {{- end }}
+            {{- if .Values.sandbox.existingCredentialsSecret }}
+            - secretRef:
+                name: {{ .Values.sandbox.existingCredentialsSecret }}
+            {{- end }}
+            {{- if .Values.objectStoreSecret }}
+            - secretRef:
+                name: {{ .Values.objectStoreSecret }}
+            {{- end }}
+          volumeMounts:
+            - name: snapshots
+              mountPath: /var/lib/brickie/snapshots
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: snapshots
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

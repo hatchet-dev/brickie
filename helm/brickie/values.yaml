@@ -1,0 +1,39 @@
+replicaCount: 1
+slots: 10
+
+image:
+  repository: ghcr.io/hatchet-dev/brickie
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+hatchet:
+  token: ""
+  existingSecret: ""
+
+sandbox:
+  namespace: ""
+  image: alpine:3
+  turnTimeout: 15m
+  idleTTL: 30m
+  runtime: auto
+  credentials: {}
+  existingCredentialsSecret: ""
+  credentialNames: []
+  warmImages: []
+  warmReplicas: 2
+
+objectStore: ""
+objectStoreSecret: ""
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+
+agent-sandbox:
+  enabled: true
+  image:
+    tag: v1.0.3
+  controller:
+    extensions: true

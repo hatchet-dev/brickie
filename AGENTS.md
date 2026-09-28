@@ -5,8 +5,10 @@ brickie runs agent sandboxes as Hatchet durable tasks. The README covers how to 
 ## Layout
 
 - `cmd/brickie/`: cobra CLI, `worker` only (the sandbox provider)
-- `internal/engine/`: turn contract, operator session, durable task, snapshot store
+- `internal/engine/`: turn contract, operator session, provider task, snapshot stores (local dir, object store)
 - `internal/driver/local/`: Docker Sandboxes micro-VMs via the `sbx` CLI
+- `internal/driver/kubernetes/`: one agent-sandbox `SandboxClaim` per sandbox, bound from a per-image warm pool, turns over pod exec
+- `helm/brickie/`: the chart (provider Deployment as a Hatchet gRPC operator, agent-sandbox vendored under `charts/`); `Dockerfile` builds the provider image
 - `sdks/typescript`: the client SDK; `examples/typescript`: the demo session
 - `docker-compose.yml`: Hatchet (lite + Postgres); the provider runs on the host (sandboxd is host-only)
 - `hack/run-demo.sh`: first-run setup + the demo session; also the end-to-end check
@@ -17,6 +19,7 @@ brickie runs agent sandboxes as Hatchet durable tasks. The README covers how to 
 go build ./... && go vet ./...
 cd sdks/typescript && pnpm install && pnpm typecheck
 cd examples/typescript && pnpm install && pnpm typecheck
+helm lint helm/brickie --set hatchet.token=t
 ```
 
 Build binaries to /tmp or use `go install`, do not commit binaries.
@@ -32,7 +35,10 @@ Build binaries to /tmp or use `go install`, do not commit binaries.
 - No host environment variables reach sandboxes; Claude auth lives in the Docker Sandboxes agent kit. Never widen this implicitly.
 - Do not add code comments except where the code cannot express a constraint. No comments explaining what the next line does.
 - First version of anything new is 0.1.0.
-- The sandbox `image` option means an sbx template. Turn timeouts are provider settings, not SDK settings.
+- The sandbox `image` option means an sbx template on the local driver and a container image on the kubernetes driver. Turn timeouts, idle TTL, and runtime class are provider settings, not SDK settings.
+- A sandbox is one live micro-VM or pod for the life of a session. The provider never recreates a sandbox behind a session: a missing or replaced sandbox is an error, and the caller creates a new one from a snapshot.
+- `helm/brickie/values.schema.json` stays in sync with `values.yaml`: every new value gets a schema entry in the same change, and the schema keeps `additionalProperties: false` at the top level so typos fail at install time.
+- One provider replica: turns on the same sandbox are serialized in-process. Add a Hatchet concurrency key on `input.sandboxId` before raising `replicaCount`.
 
 ## Environment notes
 

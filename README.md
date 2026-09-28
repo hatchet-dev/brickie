@@ -2,7 +2,7 @@
 
 brickie runs agent sandboxes as Hatchet tasks.
 
-A sandbox is a Docker Sandboxes micro-VM. Each agent turn runs in the sandbox as a Hatchet task. Each turn makes a snapshot of the workspace. A snapshot does not change. Any snapshot can start a new sandbox. A session can continue or fork from any turn. The files and the conversation are in the snapshot.
+A sandbox is a Docker Sandboxes micro-VM on a laptop, or one pod on Kubernetes. Each agent turn runs in the sandbox as a Hatchet task. Each turn makes a snapshot of the workspace. A snapshot does not change. Any snapshot can start a new sandbox. A session can continue or fork from any turn. The files and the conversation are in the snapshot.
 
 ## Requirements
 
@@ -66,14 +66,14 @@ const session = hatchet.durableTask({
 ### Create a sandbox
 
 - `hatchet.sandbox.create(ctx, options)` starts a micro-VM. This is the cold start.
-- `options.template` selects a Docker Sandboxes template. The default is the `claude` template. It has the Claude CLI, Node, git, and a shell.
+- `options.template` selects the image. On a laptop, it is a Docker Sandboxes template. The default is the `claude` template. It has the Claude CLI, Node, git, and a shell. On Kubernetes, it is a container image. The default is the `sandbox.image` value of the chart.
 - `options.from` starts the sandbox from a snapshot. Two sandboxes with the same `from` are a fork.
 
 ### Use the sandbox
 
 - `sandbox.exec(cmd)` runs a shell command. It returns `{ stdout, stderr, exitCode }`. A non-zero exit code does not cause an error.
 - `sandbox.prompt(text)` runs one Claude turn. It returns `{ reply, files }`. Claude keeps the conversation between turns.
-- `sandbox.kill()` removes the sandbox. The provider also removes a sandbox after 15 minutes without a turn. Set `--sandbox-idle-ttl` on the provider to change this time.
+- `sandbox.kill()` removes the sandbox. The provider also removes a sandbox after 30 minutes without a turn. Set `--sandbox-idle-ttl` on the provider to change this time.
 
 Each call is one Hatchet task. Each result also has `snapshotId` and `timings`. The durable task that makes the calls is the session.
 
@@ -93,3 +93,17 @@ The Hatchet in Docker Compose is the default. To use Hatchet Cloud or a self-hos
 4. Run `hack/run-demo.sh` again.
 
 The script finds the external token. It does not start the local Hatchet. It restarts the provider with that instance.
+
+## Run on Kubernetes
+
+The provider is a Deployment. It connects to Hatchet as a gRPC operator. Each sandbox is one pod that [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) manages. `hatchet.sandbox.create` claims a pod from a warm pool. The pod stays with the session until `sandbox.kill` or `sandbox.idleTTL`.
+
+```bash
+helm upgrade --install brickie helm/brickie --namespace brickie --create-namespace \
+  --set hatchet.token=$HATCHET_CLIENT_TOKEN \
+  --set objectStore=s3://my-bucket/brickie \
+  --set sandbox.image=my-registry/claude-sandbox:latest \
+  --set sandbox.credentials.ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+```
+
+The tenant must have gRPC operators enabled. Set `objectStore` so snapshots survive a provider restart. The sandbox image needs `sh`, `tar`, and for `sandbox.prompt` the Claude CLI. `sandbox.runtime` selects a runtime class: `auto` uses `kata-clh` or `gvisor` if the cluster has it. See `helm/brickie/values.yaml` for all values.
