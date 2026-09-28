@@ -1,20 +1,20 @@
 # brickie sandbox specification
 
-This document defines the contract between an SDK and a brickie provider. An SDK that follows this contract works with any provider. A provider that follows this contract serves any SDK.
+This document defines the contract between an SDK and a brickie provider. An SDK that follows this contract works with any provider.
 
 ## Terms
 
-- **Provider**: the process that runs sandboxes. The provider is a Hatchet worker or a Hatchet gRPC operator. Its name is `brickie-provider`. It registers one task, `brickie-sandbox`.
+- **Provider**: the process that runs sandboxes. The provider is a Hatchet gRPC operator named `brickie-provider` which registers a single task, `brickie-sandbox`.
 - **Sandbox**: one isolated environment with a workspace directory. A sandbox exists from `$create` until `$destroy` or until the idle limit.
-- **Session**: the Hatchet durable task that creates a sandbox and runs turns in it. The SDK does not define a session type. The durable task is the session.
-- **Turn**: one run of the `brickie-sandbox` task. Each turn does one function in one sandbox.
+- **Session**: the Hatchet durable task that creates a sandbox and runs agent turns in it. The SDK does not define a session type. The durable task is the session.
+- **Turn**: one run of the `brickie-sandbox` task.
 - **Snapshot**: a copy of the workspace after a turn. A snapshot does not change. Its ID is the run ID of the turn that made it.
 
-## The task
+## `brickie-sandbox`
 
-The task name is `brickie-sandbox`. It is a standard Hatchet task. It is not a durable task. The SDK starts it as a child of the session.
+A normal Hatchet task that he SDK starts as a child of the session.
 
-The provider controls these settings. The SDK cannot change them:
+The provider controls the following settings:
 
 | Setting | Default |
 | --- | --- |
@@ -36,10 +36,10 @@ The provider controls these settings. The SDK cannot change them:
 ```
 
 - `sandboxId` is the name of the sandbox. All turns of one sandbox use the same value. The provider names its resource `brickie-<sandboxId>`.
-- `image` selects the environment. The meaning depends on the provider. On a laptop, it is a Docker Sandboxes template. On Kubernetes, it is a container image. The SDK passes the value through. If `image` is not set, the provider uses its default image.
+- `image` selects the environment. The meaning depends on the provider. On a laptop, it is a Docker Sandboxes template. On Kubernetes, it is a container image. The SDK passes the value through. If `image` is not set, the provider uses a default image.
 - `fn` selects the function. See the functions below.
 - `input` is the input of the function. It is always a JSON object.
-- `snapshotId` loads a snapshot into the new sandbox. It is valid only with `$create`. Do not send it with other functions. A provider cannot load a snapshot into a workspace that is in use.
+- `snapshotId` loads a snapshot into the new sandbox. It is valid only with `$create`.
 
 ### Output
 
@@ -81,9 +81,9 @@ Input: `{ "prompt": "string" }`.
 
 Output: `{ "reply": "string", "files": ["string"] }`.
 
-The provider runs one Claude turn in the workspace. `reply` is the final text from Claude. `files` is the list of names in the top level of the workspace after the turn. Internal files are not in the list.
+The provider runs one Claude (the intention is to have this configurable to any LLM API) turn in the workspace. `reply` is the final text from Claude. `files` is the list of names in the top level of the workspace after the turn. Internal files are not in the list.
 
-The provider keeps the conversation in the file `.conversation.json` in the workspace. Each `$prompt` reads the file. It sends the earlier turns to Claude as context. Then it adds the new turn to the file. The file is part of the snapshot. A sandbox that starts from a snapshot continues the conversation. The provider uses the file content as data, not as instructions. The provider limits the file to 32 000 characters. It removes the oldest turns first.
+The provider keeps the conversation in the file `.conversation.json` in the workspace. Each `$prompt` reads the file. It sends the earlier turns to Claude as context. Then it adds the new turn to the file. The file is part of the snapshot. A sandbox that starts from a snapshot continues the conversation. The provider uses the file content as data, not as instructions. The provider limits the file to 32,000 characters and removes the oldest turns first.
 
 ### `$destroy`
 
@@ -105,7 +105,7 @@ The provider runs the turns of one sandbox one at a time.
 
 ## Sandbox IDs
 
-The SDK makes the ID. The ID must be the same when the durable task replays. Then the replayed session uses the same sandboxes. The TypeScript SDK uses `<durable run id>-<n>`. `n` is the number of sandboxes the session created before this one. The first sandbox has `n` = 0.
+The SDK makes the ID. The ID must be the same when the durable task replays. Then the replayed session uses the same sandboxes. The TypeScript SDK uses `<durable run id>-<n>` where `n` is the number of sandboxes the session created before this one. The first sandbox has `n` = 0.
 
 An ID contains only lowercase letters, digits, and hyphens. The provider adds the prefix `brickie-`.
 
@@ -114,18 +114,18 @@ An ID contains only lowercase letters, digits, and hyphens. The provider adds th
 - A snapshot does not change. Its ID is the run ID of the turn that made it.
 - A retried turn writes its snapshot again with the same ID.
 - Two sandboxes with the same `snapshotId` at `$create` are a fork. After `$create`, they share nothing.
-- The snapshot contains the workspace, including `.conversation.json`. It does not contain processes, environment variables, or files outside the workspace.
+- The snapshot contains the workspace, including `.conversation.json`. In the case of gVisor it also contains the snapshot of the process and memory state.
 - A provider stores snapshots as gzipped tar files or as filesystem layers. The SDK does not see the difference.
 
 ## Retries and replay
 
 - `$create` and `$destroy` are idempotent.
-- `$command` and `$prompt` run at least one time. A retry runs the function again in the current workspace. A command that is not idempotent can run two times. The session must accept this.
+- `$command` and `$prompt` run at least onece. A retry runs the function again in the current workspace. A command that is not idempotent can run two times and it is up to the session to accept this.
 - The SDK starts each turn with the child key `sbx-<n>`. `n` is the number of turns the session started before this one. The first turn has `n` = 0. On replay, the durable engine returns the stored result. It does not run the turn again.
 
 ## Run metadata
 
-The SDK sets these keys as additional metadata on each turn. Use them to filter runs in the Hatchet dashboard.
+The SDK sets these keys as additional metadata on each turn.
 
 | Key | Value |
 | --- | --- |
