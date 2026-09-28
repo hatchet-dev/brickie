@@ -137,7 +137,7 @@ func runProvider(ctx context.Context, c providerConfig) error {
 		TurnTimeout: c.turnTimeout,
 	}
 	err = engine.RunOperatorProvider(ctx, opts, c.slots)
-	if !errors.Is(err, engine.ErrOperatorUnavailable) {
+	if !errors.Is(err, engine.ErrOperatorUnavailable) || c.driver == "kubernetes" {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "brickie: %v; falling back to worker mode\n", err)

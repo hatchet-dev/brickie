@@ -13,3 +13,4 @@ sources:
 maintainers:
   - name: Kubernetes SIGs
     url: https://github.com/kubernetes-sigs
+appVersion: v1.0.4
