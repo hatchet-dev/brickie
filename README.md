@@ -75,7 +75,7 @@ const session = hatchet.durableTask({
 - `sandbox.prompt(text)` runs one Claude turn. It returns `{ reply, files }`. Claude keeps the conversation between turns.
 - `sandbox.kill()` removes the sandbox. The provider also removes a sandbox after 15 minutes without a turn. Set `--sandbox-idle-ttl` on the provider to change this time.
 
-Each call is one Hatchet task. Each result also has `snapshotId` and `timings`. The durable task that makes the calls is the session.
+Each call is one Hatchet task. Each result also has `snapshotId` and `timings`. The durable task that makes the calls is the session. The task contract is in [docs/SPEC.md](docs/SPEC.md).
 
 ### Connect to Hatchet
 

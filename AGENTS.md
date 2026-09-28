@@ -1,6 +1,6 @@
 # Working on brickie
 
-brickie runs agent sandboxes as Hatchet durable tasks. The README covers how to run it.
+brickie runs agent sandboxes as Hatchet durable tasks. The README covers how to run it. `docs/SPEC.md` is the task contract between SDKs and providers. Update it in the same PR when `internal/engine/types.go` or `sdks/typescript/src/sandbox.ts` changes.
 
 ## Layout
 
