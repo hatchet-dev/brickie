@@ -88,7 +88,8 @@ type SandboxMeta struct {
 
 // ListInput filters a $list turn.
 type ListInput struct {
-	Metadata map[string]string `json:"metadata,omitempty"`
+	SandboxID string            `json:"sandboxId,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
 // SandboxInfo is one entry in a $list result.

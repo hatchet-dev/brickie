@@ -172,7 +172,7 @@ func (r *turnRunner) list(input TurnInput) (TurnResult, error) {
 	}
 	infos := []SandboxInfo{}
 	for _, m := range metas {
-		if !matches(m.Metadata, in.Metadata) {
+		if (in.SandboxID != "" && m.SandboxID != in.SandboxID) || !matches(m.Metadata, in.Metadata) {
 			continue
 		}
 		info := SandboxInfo{SandboxID: m.SandboxID, Metadata: m.Metadata, CreatedAt: m.CreatedAt}

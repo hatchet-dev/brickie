@@ -54,6 +54,8 @@ export interface ConnectOpts {
 }
 
 export interface SandboxListOpts {
+  /** Only the sandbox with this ID. */
+  sandboxId?: string;
   /** Only sandboxes whose metadata contains every one of these pairs. */
   metadata?: Record<string, string>;
 }
@@ -124,7 +126,10 @@ export class Sandbox {
 
   /** Lists sandboxes on the provider. Prefer `hatchet.sandbox.list`. */
   static async list(client: HatchetClient, opts: SandboxListOpts = {}): Promise<SandboxInfo[]> {
-    const result = await turnRunner(client)({ fn: '$list', input: opts.metadata ? { metadata: opts.metadata } : {} });
+    const result = await turnRunner(client)({
+      fn: '$list',
+      input: { ...(opts.sandboxId ? { sandboxId: opts.sandboxId } : {}), ...(opts.metadata ? { metadata: opts.metadata } : {}) },
+    });
     const raw = (result.output.sandboxes ?? []) as Array<Omit<SandboxInfo, 'createdAt' | 'lastUsed'> & { createdAt: string; lastUsed?: string }>;
     return raw.map((s) => ({ ...s, createdAt: new Date(s.createdAt), lastUsed: s.lastUsed ? new Date(s.lastUsed) : undefined }));
   }
@@ -156,7 +161,7 @@ export interface SandboxNamespace {
   create(opts?: SandboxOpts): Promise<Sandbox>;
   /** Attaches to a sandbox by ID. If it is not running, the provider starts it from its latest snapshot. */
   connect(sandboxId: string, opts?: ConnectOpts): Promise<Sandbox>;
-  /** Lists sandboxes the provider knows, optionally filtered by metadata. */
+  /** Lists sandboxes the provider knows, filtered by ID or metadata. */
   list(opts?: SandboxListOpts): Promise<SandboxInfo[]>;
 }
 
