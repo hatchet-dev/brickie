@@ -5,7 +5,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "docs": "typedoc"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
@@ -20,6 +21,7 @@
   "devDependencies": {
     "@hatchet-dev/typescript-sdk": "^1.33.1",
     "@types/node": "^24.0.0",
+    "typedoc": "^0.28.0",
     "typescript": "^5.9.0"
   }
 }

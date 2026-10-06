@@ -1,49 +1,50 @@
 import { randomUUID } from 'node:crypto';
-import * as readline from 'node:readline/promises';
 import '@hatchet/sandbox';
-import type { Sandbox } from '@hatchet/sandbox';
 import { initClient } from './client.js';
 
-const sec = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+const opts = process.env.DEMO_TEMPLATE ? { template: process.env.DEMO_TEMPLATE } : {};
 
-function breakdown(totalMs: number, timings: Record<string, number> = {}) {
-  const { claim = 0, restore = 0, exec = 0, checkpoint = 0, llm = 0 } = timings;
-  const parts = [`total ${sec(totalMs)}`];
-  if (claim) parts.push(`sandbox ${sec(claim + restore)}`);
-  if (exec) parts.push(llm ? `agent ${sec(exec - llm)} · llm ${sec(llm)}` : `run ${sec(exec)}`);
-  if (checkpoint) parts.push(`snapshot ${sec(checkpoint)}`);
-  const hatchet = totalMs - claim - restore - exec - checkpoint;
-  if (hatchet > 0 && (claim || exec)) parts.push(`hatchet ${sec(hatchet)}`);
-  return parts.join(' · ');
-}
+const sec = (ms = 0) => `${(ms / 1000).toFixed(2)}s`;
+const step = (name: string, detail: string, t: { timings?: Record<string, number>; snapshotId?: string } = {}) => {
+  const { claim, restore, exec, checkpoint } = t.timings ?? {};
+  const parts = [claim && `start ${sec(claim)}`, restore && `restore ${sec(restore)}`, exec && `run ${sec(exec)}`, checkpoint && `snapshot ${sec(checkpoint)}`];
+  console.log(`${name.padEnd(8)} ${detail}${t.snapshotId ? `  [snapshot ${t.snapshotId}]` : ''}  ${parts.filter(Boolean).join(' · ')}`);
+};
 
 async function main() {
   const hatchet = await initClient();
 
   const session = hatchet.durableTask({
     name: 'agent-session',
-    executionTimeout: '2h',
-    fn: async (input: { sessionId: string }, ctx) => {
-      const opts = process.env.DEMO_TEMPLATE ? { template: process.env.DEMO_TEMPLATE } : {};
-      let sandbox: Sandbox | undefined;
-      for (;;) {
-        const { message } = await ctx.waitForEvent('turn', `input.sessionId == '${input.sessionId}'`);
-        const text = String(message);
-        if (text === '/exit') {
-          await sandbox?.kill();
-          return { done: true };
-        }
-        if (text.startsWith('/restore ')) {
-          const from = text.split(/\s+/)[1];
-          await sandbox?.kill();
-          sandbox = await hatchet.sandbox.create(ctx, { ...opts, from });
-          await ctx.putStream(JSON.stringify({ info: `new sandbox ${sandbox.sandboxId} forked from snapshot ${from}` }));
-          continue;
-        }
-        sandbox ??= await hatchet.sandbox.create(ctx, opts);
-        const result = text.startsWith('!') ? await sandbox.exec(text.slice(1)) : await sandbox.prompt(text);
-        await ctx.putStream(JSON.stringify(result));
-      }
+    executionTimeout: '30m',
+    fn: async (input: { id: string }) => {
+      const started = Date.now();
+      const sandbox = await hatchet.sandbox.create({ ...opts, id: input.id, metadata: { tenant: 'acme', purpose: 'demo' } });
+      step('create', sandbox.sandboxId, { timings: { claim: Date.now() - started } });
+      const found = await hatchet.sandbox.list({ metadata: { tenant: 'acme' } });
+      step('list', found.map((s) => `${s.sandboxId}${s.live ? ' (live)' : ''}`).join(' '));
+
+      const hello = await sandbox.exec('echo hello > a.txt && cat a.txt');
+      step('exec', JSON.stringify(hello.stdout), hello);
+
+      const written = await sandbox.files.write('b.txt', '  bytes kept exact  \n');
+      step('write', `${written.path} ${written.size} bytes`);
+      step('read', JSON.stringify(await sandbox.files.read('b.txt')));
+      step('files', (await sandbox.files.list()).map((e) => e.path).join(' '));
+
+      const fork = await hatchet.sandbox.create({ ...opts, from: hello.snapshotId });
+      const inFork = await fork.exec('ls');
+      step('fork', `${fork.sandboxId} has ${inFork.stdout.split('\n').join(' ')} (no b.txt)`, inFork);
+      await fork.kill();
+      await sandbox.kill();
+      step('kill', 'both sandboxes removed');
+
+      const again = await hatchet.sandbox.connect(input.id, opts);
+      const back = await again.exec('cat a.txt b.txt');
+      step('connect', `${again.sandboxId} from its latest snapshot: ${JSON.stringify(back.stdout)}`, back);
+      await again.kill();
+
+      return { sandboxId: input.id, lastSnapshot: back.snapshotId };
     },
   });
 
@@ -51,59 +52,20 @@ async function main() {
   void worker.start();
   await worker.waitUntilReady();
 
-  const sessionId = randomUUID();
-  const ref = await session.runNoWait({ sessionId });
-  const stream = hatchet.runs.subscribeToStream(await ref.getWorkflowRunId());
+  const id = `demo-${randomUUID().slice(0, 8)}`;
+  console.log(`agent-session durable task for sandbox ${id}\n`);
+  const result = await session.run({ id });
+  console.log(`\ndone: ${JSON.stringify(result)}`);
+  console.log(`continue it later: hatchet.sandbox.connect('${id}')`);
 
-  console.log('brickie session — one durable task, one sandbox, every message is a turn inside it');
-  console.log('  <text> Claude turn · !<cmd> shell turn · /restore <id> fork a snapshot · /exit\n');
-
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-  const end = async () => {
-    await hatchet.events.push('turn', { sessionId, message: '/exit' });
-    await ref.output.catch((err) => console.error(`session failed: ${err?.message ?? err}`));
-    rl.close();
-    await worker.stop();
-    await hatchet.stopEmbedded?.();
-    process.exit(0);
-  };
-  let interrupted = false;
-  rl.on('SIGINT', () => {
-    if (interrupted) process.exit(130);
-    interrupted = true;
-    console.log('\nending session (ctrl+c again to force quit)');
-    void end();
-  });
-
-  for (;;) {
-    const line = (await rl.question('you> ')).trim();
-    if (!line) continue;
-    if (line === '/exit') await end();
-
-    const started = Date.now();
-    await hatchet.events.push('turn', { sessionId, message: line });
-    const next = await stream.next();
-    if (next.done) {
-      if (!interrupted) {
-        console.log('session ended');
-        await end();
-      }
-      return;
-    }
-    const result = JSON.parse(next.value);
-    if (result.info) {
-      console.log(`${result.info}\n`);
-      continue;
-    }
-    console.log(result.reply ?? result.stdout ?? '');
-    if (result.stderr) console.log(result.stderr);
-    console.log(`(snapshot ${result.snapshotId} · ${breakdown(Date.now() - started, result.timings)})\n`);
-  }
+  await worker.stop();
+  await hatchet.stopEmbedded?.();
 }
 
-main().catch((err) => {
-  if (err?.code === 'ABORT_ERR') return;
-  console.error(err);
-  process.exit(1);
-});
+main().then(
+  () => process.exit(0),
+  (err) => {
+    console.error(err);
+    process.exit(1);
+  }
+);

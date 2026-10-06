@@ -1,0 +1,49 @@
+import { FilesystemError } from '@hatchet/sandbox';
+import { initClient } from './client.js';
+
+async function main() {
+  const hatchet = await initClient();
+  const sandbox = await hatchet.sandbox.create({
+    ...(process.env.DEMO_SANDBOX_ID ? { id: process.env.DEMO_SANDBOX_ID } : {}),
+    ...(process.env.DEMO_TEMPLATE ? { template: process.env.DEMO_TEMPLATE } : {}),
+  });
+  console.log(`sandbox ${sandbox.sandboxId}`);
+
+  try {
+    const written = await sandbox.files.write('notes/hello.txt', '  exact bytes, spaces kept  \n');
+    console.log('write   ', written.path, `${written.size} bytes`);
+    console.log('read    ', JSON.stringify(await sandbox.files.read('notes/hello.txt')));
+
+    await sandbox.files.copy('notes', 'backup');
+    await sandbox.files.rename('notes/hello.txt', 'notes/renamed.txt');
+    for (const e of await sandbox.files.list('.', { depth: 2 })) {
+      console.log('list    ', e.type.padEnd(4), e.permissions, String(e.size).padStart(5), e.path);
+    }
+
+    await sandbox.files.remove('backup');
+    console.log('exists  ', await sandbox.files.exists('backup'));
+
+    try {
+      await sandbox.files.read('../outside');
+    } catch (err) {
+      if (!(err instanceof FilesystemError)) throw err;
+      console.log('error   ', err.code);
+    }
+
+    if (process.env.DEMO_DOWNLOAD_URL) {
+      const got = await sandbox.files.download(process.env.DEMO_DOWNLOAD_URL, 'downloads/file');
+      console.log('download', got.path, `${got.size} bytes`);
+    }
+  } finally {
+    await sandbox.kill();
+    await hatchet.stopEmbedded?.();
+  }
+}
+
+main().then(
+  () => process.exit(0),
+  (err) => {
+    console.error(err);
+    process.exit(1);
+  }
+);

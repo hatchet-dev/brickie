@@ -6,7 +6,8 @@ brickie runs agent sandboxes as Hatchet durable tasks. The README covers how to 
 
 - `cmd/brickie/`: cobra CLI, `worker` only (the sandbox provider)
 - `internal/engine/`: turn contract, operator session, durable task, snapshot store
-- `internal/driver/local/`: Docker Sandboxes micro-VMs via the `sbx` CLI
+- `internal/driver/local/`: sandbox lifecycle, snapshots, and turn dispatch over a `Backend` (create, exec, destroy); `docker/` and `sbx/` are the backends
+- `internal/driver/fsops/`: the `$fs.*` file functions on the workspace mount through `os.Root`
 - `sdks/typescript`: the client SDK; `examples/typescript`: the demo session
 - `docker-compose.yml`: Hatchet (lite + Postgres); the provider runs on the host (sandboxd is host-only)
 - `hack/run-demo.sh`: first-run setup + the demo session; also the end-to-end check
@@ -32,10 +33,11 @@ Build binaries to /tmp or use `go install`, do not commit binaries.
 - No host environment variables reach sandboxes; Claude auth lives in the Docker Sandboxes agent kit. Never widen this implicitly.
 - Do not add code comments except where the code cannot express a constraint. No comments explaining what the next line does.
 - First version of anything new is 0.1.0.
-- The sandbox `image` option means an sbx template. Turn timeouts are provider settings, not SDK settings.
+- The sandbox `template` option means a container image on `docker` and an sbx template on `sbx`. Turn timeouts and idle TTL are provider settings, not SDK settings.
+- A sandbox id is a run id or a caller-supplied id; the provider keeps a latest-snapshot pointer per sandbox and `$connect` resolves it. Never silently give a connect an empty workspace.
 
 ## Environment notes
 
 - When targeting Hatchet Cloud from a dev machine that has local hatchet mkcert setup, `unset HATCHET_CLIENT_TLS_ROOT_CA_FILE` first.
-- `sbx` (Docker Sandboxes) needs `sbx login` and `sbx policy init` once; `hack/run-demo.sh` handles it.
-- Claude spawned inside an sbx sandbox derives its working directory as the parent of the workspace mount. Always anchor prompts with the workspace path, as `internal/engine/runner.go` does.
+- `sbx` (Docker Sandboxes) needs `sbx login` and `sbx policy init` once; `hack/run-demo.sh --driver sbx` handles it.
+- Claude spawned inside an sbx sandbox derives its working directory as the parent of the workspace mount. Run commands with the workspace as the working directory, as `internal/driver/local/local.go` does.

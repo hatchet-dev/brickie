@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "typecheck": "tsc",
-    "demo": "tsx demo.ts"
+    "demo": "tsx demo.ts",
+    "fs-demo": "tsx fs-demo.ts"
   },
   "dependencies": {
     "@hatchet/sandbox": "workspace:*",

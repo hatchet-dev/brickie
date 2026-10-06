@@ -4,30 +4,36 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 const TaskName = "brickie-sandbox"
 
-// Turn functions the SDK can request. Create and Destroy manage the sandbox
-// lifecycle; Command and Prompt run inside it.
+// Turn functions the SDK can request. Create, Connect, and Destroy manage the
+// sandbox lifecycle; Command runs inside it. Drivers also serve the $fs.* file
+// functions.
 const (
 	CreateFn  = "$create"
+	ConnectFn = "$connect"
+	ListFn    = "$list"
 	CommandFn = "$command"
-	PromptFn  = "$prompt"
 	DestroyFn = "$destroy"
 )
 
 type TurnInput struct {
-	SandboxID  string          `json:"sandboxId,omitempty"`
-	Image      string          `json:"image,omitempty"`
-	Fn         string          `json:"fn"`
-	Input      json.RawMessage `json:"input"`
-	SnapshotID string          `json:"snapshotId,omitempty"`
+	SandboxID  string            `json:"sandboxId,omitempty"`
+	Image      string            `json:"image,omitempty"`
+	Fn         string            `json:"fn"`
+	Input      json.RawMessage   `json:"input"`
+	SnapshotID string            `json:"snapshotId,omitempty"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
+	IdleTTLMs  int64             `json:"idleTtlMs,omitempty"`
 }
 
 type TurnResult struct {
 	Output     json.RawMessage  `json:"output"`
-	SnapshotID string           `json:"snapshotId"`
+	SandboxID  string           `json:"sandboxId"`
+	SnapshotID string           `json:"snapshotId,omitempty"`
 	Timings    map[string]int64 `json:"timings,omitempty"`
 }
 
@@ -39,6 +45,7 @@ type TurnRequest struct {
 	SnapshotTar  []byte
 	SnapshotID   string
 	CheckpointID string
+	IdleTTL      time.Duration
 	Log          func(message string)
 }
 
@@ -65,6 +72,35 @@ type SnapshotNativeDriver interface {
 	SnapshotNative() bool
 }
 
+// LiveLister reports the sandboxes a driver currently has running and when
+// each last ran a turn.
+type LiveLister interface {
+	Live() map[string]time.Time
+}
+
+// SandboxMeta is what a sandbox was created with, kept for connect and list.
+type SandboxMeta struct {
+	SandboxID string            `json:"sandboxId"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+	IdleTTL   time.Duration     `json:"idleTtl,omitempty"`
+	CreatedAt time.Time         `json:"createdAt"`
+}
+
+// ListInput filters a $list turn.
+type ListInput struct {
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
+// SandboxInfo is one entry in a $list result.
+type SandboxInfo struct {
+	SandboxID      string            `json:"sandboxId"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
+	Live           bool              `json:"live"`
+	LatestSnapshot string            `json:"latestSnapshot,omitempty"`
+	CreatedAt      time.Time         `json:"createdAt"`
+	LastUsed       *time.Time        `json:"lastUsed,omitempty"`
+}
+
 type CommandInput struct {
 	Cmd string `json:"cmd"`
 }
@@ -73,13 +109,4 @@ type CommandOutput struct {
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
 	ExitCode int    `json:"exitCode"`
-}
-
-type PromptInput struct {
-	Prompt string `json:"prompt"`
-}
-
-type PromptOutput struct {
-	Reply string   `json:"reply"`
-	Files []string `json:"files"`
 }

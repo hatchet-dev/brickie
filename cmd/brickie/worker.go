@@ -13,9 +13,21 @@ import (
 	hatchetotel "github.com/hatchet-dev/hatchet/sdks/go/opentelemetry"
 	"github.com/spf13/cobra"
 
+	"github.com/hatchet-dev/brickie/internal/driver/docker"
 	"github.com/hatchet-dev/brickie/internal/driver/local"
+	"github.com/hatchet-dev/brickie/internal/driver/sbx"
 	"github.com/hatchet-dev/brickie/internal/engine"
+	"github.com/hatchet-dev/brickie/internal/image"
 )
+
+func envDurationOr(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return fallback
+}
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -25,9 +37,12 @@ func envOr(key, fallback string) string {
 }
 
 type providerConfig struct {
+	driver      string
+	image       string
 	snapshotDir string
 	turnTimeout time.Duration
 	idleTTL     time.Duration
+	maxIdleTTL  time.Duration
 	slots       int
 }
 
@@ -40,6 +55,8 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 			defaultTimeout = d
 		}
 	}
+	cmd.Flags().StringVar(&providerCfg.driver, "driver", envOr("BRICKIE_DRIVER", "docker"), "sandbox driver: docker (plain containers) or sbx (Docker Sandboxes micro-VMs)")
+	cmd.Flags().StringVar(&providerCfg.image, "image", envOr("BRICKIE_SANDBOX_IMAGE", ""), "default sandbox image (docker: a container image, default alpine:3; sbx: a template, default claude)")
 	cmd.Flags().StringVar(&providerCfg.snapshotDir, "snapshot-dir", envOr("BRICKIE_SNAPSHOT_DIR", engine.DefaultSnapshotDir()), "snapshot storage directory")
 	cmd.Flags().DurationVar(&providerCfg.turnTimeout, "turn-timeout", defaultTimeout, "execution timeout per sandbox turn")
 	defaultSlots := 10
@@ -56,17 +73,37 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 		}
 	}
 	cmd.Flags().DurationVar(&providerCfg.idleTTL, "sandbox-idle-ttl", defaultIdle, "destroy a sandbox after this long without a turn")
+	cmd.Flags().DurationVar(&providerCfg.maxIdleTTL, "max-sandbox-idle-ttl", envDurationOr("BRICKIE_MAX_SANDBOX_IDLE_TTL", 24*time.Hour), "longest idle ttl a sandbox may ask for at create")
 }
 
 func runProvider(ctx context.Context, c providerConfig) error {
 	store := engine.FSSnapshotStore{Dir: c.snapshotDir}
 	store.Prune(7 * 24 * time.Hour)
-	driver := local.New(c.idleTTL)
+	var backend local.Backend
+	defaultImage := c.image
+	switch c.driver {
+	case "docker":
+		if defaultImage == "" {
+			defaultImage = "alpine:3"
+		}
+		b, err := docker.New()
+		if err != nil {
+			return err
+		}
+		backend = b
+	case "sbx":
+		backend = sbx.New()
+	default:
+		return fmt.Errorf("unknown driver %q (docker|sbx)", c.driver)
+	}
+	driver := local.New(backend, c.idleTTL)
 	defer driver.Close()
 	opts := engine.ProviderOpts{
-		Driver:      driver,
-		Store:       store,
-		TurnTimeout: c.turnTimeout,
+		Driver:        driver,
+		Store:         store,
+		ImageProvider: image.Registry{Default: defaultImage},
+		TurnTimeout:   c.turnTimeout,
+		MaxIdleTTL:    c.maxIdleTTL,
 	}
 	err := engine.RunOperatorProvider(ctx, opts, c.slots)
 	if !errors.Is(err, engine.ErrOperatorUnavailable) {
@@ -93,7 +130,7 @@ func runProvider(ctx context.Context, c providerConfig) error {
 			}()
 		}
 	}
-	fmt.Fprintf(os.Stderr, "brickie: sandbox provider started\n")
+	fmt.Fprintf(os.Stderr, "brickie: sandbox provider started (driver=%s)\n", c.driver)
 	return w.StartBlocking(ctx)
 }
 
