@@ -16,6 +16,7 @@ const (
 	CreateFn  = "$create"
 	ConnectFn = "$connect"
 	ListFn    = "$list"
+	PresignFn = "$fs.presign"
 	CommandFn = "$command"
 	DestroyFn = "$destroy"
 )
@@ -103,7 +104,8 @@ type SandboxInfo struct {
 }
 
 type CommandInput struct {
-	Cmd string `json:"cmd"`
+	Cmd       string `json:"cmd"`
+	TimeoutMs int64  `json:"timeoutMs,omitempty"`
 }
 
 type CommandOutput struct {

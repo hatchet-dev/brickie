@@ -18,8 +18,6 @@ import (
 
 const teardownTimeout = 30 * time.Second
 
-var ErrOperatorUnavailable = errors.New("operator mode unavailable")
-
 func operatorActionID() string {
 	return strings.ToLower(TaskName + ":" + TaskName)
 }
@@ -37,7 +35,7 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 	runner := newTurnRunner(opts)
 	token := os.Getenv("HATCHET_CLIENT_TOKEN")
 	if token == "" {
-		return fmt.Errorf("%w: HATCHET_CLIENT_TOKEN is not set", ErrOperatorUnavailable)
+		return errors.New("HATCHET_CLIENT_TOKEN is not set")
 	}
 	exchange, err := hostgrpc.NewStaticExchange(token)
 	if err != nil {
@@ -63,7 +61,7 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 		SlotConfig: map[string]int32{"default": int32(slots)},
 	})
 	if err != nil {
-		return fmt.Errorf("%w: open operator session (is SERVER_GRPC_OPERATORS_ENABLED set for the tenant?): %v", ErrOperatorUnavailable, err)
+		return fmt.Errorf("open operator session (the tenant needs SERVER_GRPC_OPERATORS_ENABLED and Hatchet v0.110 or newer): %w", err)
 	}
 	provider.session = session
 	close(provider.ready)
@@ -73,7 +71,7 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 		Tasks: []*operatorclient.CreateTaskOpts{{
 			ReadableId: TaskName,
 			Action:     operatorActionID(),
-			Timeout:    runner.timeout.String(),
+			Timeout:    turnExecutionTimeout.String(),
 			Retries:    int32(runner.retries),
 		}},
 	}
@@ -117,7 +115,7 @@ func (p *operatorProvider) HandleAction(_ context.Context, action *operatorclien
 func (p *operatorProvider) execute(action *operatorclient.AssignedAction) {
 	defer p.wg.Done()
 	<-p.ready
-	tctx, cancel := context.WithTimeout(context.Background(), p.runner.timeout)
+	tctx, cancel := context.WithTimeout(context.Background(), turnExecutionTimeout)
 	p.mu.Lock()
 	p.inFlight[action.TaskRunExternalId] = cancel
 	p.mu.Unlock()

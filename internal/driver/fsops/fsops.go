@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,30 +22,39 @@ import (
 // Prefix marks the file functions in a turn request.
 const Prefix = "$fs."
 
-// MaxFileBytes bounds one read or write; larger files go through download and upload.
-const MaxFileBytes = 2 << 20
+// DefaultMaxFileBytes bounds one read or write unless the provider sets its own limit.
+const DefaultMaxFileBytes = 2 << 20
 
-// Result is the output of a command run inside the sandbox.
-type Result struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
+// Staging carries files larger than the limit between the SDK and the
+// workspace through an object store.
+type Staging interface {
+	Open(ctx context.Context, key string) (io.ReadCloser, error)
+	Put(ctx context.Context, key string, r io.Reader) error
+	Delete(ctx context.Context, key string) error
+	GetURL(ctx context.Context, key string) (string, error)
+	NewKey(sandboxID string) string
 }
 
-// Exec runs argv inside the sandbox with the workspace as the working directory.
-type Exec func(ctx context.Context, argv []string) (Result, error)
+// Options configures one Turn.
+type Options struct {
+	MaxBytes  int64
+	Staging   Staging
+	SandboxID string
+}
 
 type fsFile struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
+	Path      string `json:"path"`
+	Content   string `json:"content"`
+	StagedKey string `json:"stagedKey"`
 }
 
 type fsInput struct {
-	Path    string   `json:"path"`
-	NewPath string   `json:"newPath"`
-	URL     string   `json:"url"`
-	Depth   int      `json:"depth"`
-	Files   []fsFile `json:"files"`
+	Path      string   `json:"path"`
+	NewPath   string   `json:"newPath"`
+	URL       string   `json:"url"`
+	Depth     int      `json:"depth"`
+	Files     []fsFile `json:"files"`
+	TimeoutMs int64    `json:"timeoutMs"`
 }
 
 type fsEntry struct {
@@ -180,7 +191,8 @@ func copyTree(root *os.Root, src, dst string) error {
 	return out.Close()
 }
 
-func runFS(workspace, fn string, in fsInput) (out map[string]any, mutated bool, err error) {
+func runFS(ctx context.Context, workspace, fn string, in fsInput, opts Options) (out map[string]any, mutated bool, err error) {
+	maxBytes := opts.MaxBytes
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
 		return nil, false, err
@@ -200,8 +212,24 @@ func runFS(workspace, fn string, in fsInput) (out map[string]any, mutated bool, 
 		if info.IsDir() {
 			return nil, false, failf("is_a_directory", "%q is a directory", p)
 		}
-		if info.Size() > MaxFileBytes {
-			return nil, false, failf("too_large", "%q is %d bytes; read accepts up to %d, use files.upload for larger files", p, info.Size(), MaxFileBytes)
+		if info.Size() > maxBytes {
+			if opts.Staging == nil {
+				return nil, false, failf("too_large", "%q is %d bytes; read accepts up to %d (provider --max-file-bytes) and the provider has no --object-store for larger files", p, info.Size(), maxBytes)
+			}
+			f, err := root.Open(p)
+			if err != nil {
+				return nil, false, err
+			}
+			defer func() { _ = f.Close() }()
+			key := opts.Staging.NewKey(opts.SandboxID)
+			if err := opts.Staging.Put(ctx, key, f); err != nil {
+				return nil, false, failf("staging_failed", "stage %q: %v", p, err)
+			}
+			url, err := opts.Staging.GetURL(ctx, key)
+			if err != nil {
+				return nil, false, failf("staging_failed", "sign %q: %v", p, err)
+			}
+			return map[string]any{"stagedKey": key, "url": url, "size": info.Size()}, false, nil
 		}
 		b, err := root.ReadFile(p)
 		if err != nil {
@@ -216,18 +244,37 @@ func runFS(workspace, fn string, in fsInput) (out map[string]any, mutated bool, 
 			if err != nil {
 				return nil, false, err
 			}
-			b, err := base64.StdEncoding.DecodeString(f.Content)
-			if err != nil {
-				return nil, false, failf("invalid_content", "content of %q is not base64", fp)
-			}
-			if total += len(b); total > MaxFileBytes {
-				return nil, false, failf("too_large", "write accepts up to %d bytes per call, use files.download for larger files", MaxFileBytes)
-			}
 			if err := root.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
 				return nil, len(entries) > 0, err
 			}
-			if err := root.WriteFile(fp, b, 0o644); err != nil {
-				return nil, len(entries) > 0, err
+			if f.StagedKey != "" {
+				if opts.Staging == nil {
+					return nil, len(entries) > 0, failf("staging_failed", "the provider has no --object-store")
+				}
+				if !strings.HasPrefix(f.StagedKey, "brickie-staging/"+opts.SandboxID+"/") {
+					return nil, len(entries) > 0, failf("invalid", "staged key %q does not belong to this sandbox", f.StagedKey)
+				}
+				src, err := opts.Staging.Open(ctx, f.StagedKey)
+				if err != nil {
+					return nil, len(entries) > 0, failf("staging_failed", "open staged %q: %v", fp, err)
+				}
+				err = writeStream(root, fp, src)
+				_ = src.Close()
+				_ = opts.Staging.Delete(ctx, f.StagedKey)
+				if err != nil {
+					return nil, true, err
+				}
+			} else {
+				b, err := base64.StdEncoding.DecodeString(f.Content)
+				if err != nil {
+					return nil, false, failf("invalid_content", "content of %q is not base64", fp)
+				}
+				if total += len(b); int64(total) > maxBytes {
+					return nil, len(entries) > 0, failf("too_large", "write accepts up to %d bytes per call (provider --max-file-bytes); the SDK stages larger files through the provider's --object-store", maxBytes)
+				}
+				if err := root.WriteFile(fp, b, 0o644); err != nil {
+					return nil, len(entries) > 0, err
+				}
 			}
 			e, err := entryOf(root, fp)
 			if err != nil {
@@ -297,37 +344,121 @@ func runFS(workspace, fn string, in fsInput) (out map[string]any, mutated bool, 
 	return nil, false, fmt.Errorf("unknown sandbox fn %q", fn)
 }
 
-func transfer(ctx context.Context, workspace, fn string, in fsInput, exec Exec) (map[string]any, bool, error) {
+func writeStream(root *os.Root, p string, src io.Reader) error {
+	tmp := p + ".brickie-tmp"
+	out, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		_ = out.Close()
+		_ = root.Remove(tmp)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = root.Remove(tmp)
+		return err
+	}
+	return root.Rename(tmp, p)
+}
+
+// safeClient refuses URLs that resolve to loopback, link-local, or private
+// addresses, so a caller cannot use the provider to reach its own network.
+var safeClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			if err != nil {
+				return nil, err
+			}
+			for _, ip := range ips {
+				if ip.IP.IsLoopback() || ip.IP.IsPrivate() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() || ip.IP.IsUnspecified() {
+					return nil, fmt.Errorf("refusing to connect to %s (%s): private or local address", host, ip.IP)
+				}
+			}
+			return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+		},
+	},
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("too many redirects")
+		}
+		if req.URL.Scheme != "https" {
+			return fmt.Errorf("redirect to %s refused: https only", req.URL)
+		}
+		return nil
+	},
+}
+
+func transfer(ctx context.Context, workspace, fn string, in fsInput) (map[string]any, bool, error) {
 	p, err := localPath(in.Path)
 	if err != nil {
 		return nil, false, err
 	}
 	u, err := url.Parse(in.URL)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return nil, false, failf("invalid_url", "url must be an http or https URL")
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return nil, false, failf("invalid_url", "url must be an https URL")
 	}
-	args := []string{"curl", "-fsS", "--proto", "=http,https"}
-	upload := fn == Prefix+"upload"
-	if upload {
-		args = append(args, "-T", p, in.URL)
-	} else {
-		args = append(args, "-L", "--create-dirs", "-o", p, in.URL)
-	}
-	res, err := exec(ctx, args)
-	if err != nil {
-		return nil, false, err
-	}
-	if res.ExitCode != 0 {
-		return nil, !upload, failf("transfer_failed", "curl exit %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
-	}
-	if upload {
-		return map[string]any{}, false, nil
+	if in.TimeoutMs > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(in.TimeoutMs)*time.Millisecond)
+		defer cancel()
 	}
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
-		return nil, true, err
+		return nil, false, err
 	}
 	defer func() { _ = root.Close() }()
+	if fn == Prefix+"upload" {
+		f, err := root.Open(p)
+		if err != nil {
+			return nil, false, err
+		}
+		defer func() { _ = f.Close() }()
+		info, err := f.Stat()
+		if err != nil {
+			return nil, false, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, in.URL, f)
+		if err != nil {
+			return nil, false, failf("invalid_url", "%v", err)
+		}
+		req.ContentLength = info.Size()
+		req.Header.Set("Content-Type", "application/octet-stream")
+		res, err := safeClient.Do(req)
+		if err != nil {
+			return nil, false, failf("transfer_failed", "upload %q: %v", p, err)
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 4096))
+		_ = res.Body.Close()
+		if res.StatusCode >= 300 {
+			return nil, false, failf("transfer_failed", "upload %q: HTTP %d", p, res.StatusCode)
+		}
+		return map[string]any{}, false, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, in.URL, nil)
+	if err != nil {
+		return nil, false, failf("invalid_url", "%v", err)
+	}
+	res, err := safeClient.Do(req)
+	if err != nil {
+		return nil, false, failf("transfer_failed", "download: %v", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode >= 300 {
+		return nil, false, failf("transfer_failed", "download: HTTP %d", res.StatusCode)
+	}
+	if err := root.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return nil, false, err
+	}
+	if err := writeStream(root, p, res.Body); err != nil {
+		return nil, true, failf("transfer_failed", "download into %q: %v", p, err)
+	}
 	e, err := entryOf(root, p)
 	if err != nil {
 		return nil, true, err
@@ -336,16 +467,19 @@ func transfer(ctx context.Context, workspace, fn string, in fsInput, exec Exec) 
 }
 
 // Turn runs one file function; caller mistakes come back in the output as {"error": ...}.
-func Turn(ctx context.Context, workspace, fn string, raw json.RawMessage, exec Exec) (out map[string]any, mutated bool, err error) {
+func Turn(ctx context.Context, workspace, fn string, raw json.RawMessage, opts Options) (out map[string]any, mutated bool, err error) {
+	if opts.MaxBytes <= 0 {
+		opts.MaxBytes = DefaultMaxFileBytes
+	}
 	var in fsInput
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, false, err
 	}
 	switch fn {
 	case Prefix + "download", Prefix + "upload":
-		out, mutated, err = transfer(ctx, workspace, fn, in, exec)
+		out, mutated, err = transfer(ctx, workspace, fn, in)
 	default:
-		out, mutated, err = runFS(workspace, fn, in)
+		out, mutated, err = runFS(ctx, workspace, fn, in, opts)
 	}
 	if err == nil {
 		return out, mutated, nil

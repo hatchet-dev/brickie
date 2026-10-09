@@ -17,7 +17,7 @@ services:
       retries: 5
       start_period: 10s
   hatchet:
-    image: ghcr.io/hatchet-dev/hatchet/hatchet-lite:v0.107.0
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-lite:v0.110.5
     ports:
       - "127.0.0.1:8888:8888"
       - "127.0.0.1:7077:7077"

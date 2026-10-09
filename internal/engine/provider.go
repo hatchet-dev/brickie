@@ -5,11 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"time"
-
-	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
 	"github.com/hatchet-dev/brickie/internal/image"
 )
@@ -18,24 +15,24 @@ type ProviderOpts struct {
 	Driver        Driver
 	Store         SnapshotStore
 	ImageProvider image.Provider
-	TurnTimeout   time.Duration
 	Retries       int
 	MaxIdleTTL    time.Duration
+	Staging       *Staging
 }
+
+// turnExecutionTimeout bounds a hung sandbox. The real limits are the SDK's
+// per-call timeoutMs and the calling task's own timeout.
+const turnExecutionTimeout = 24 * time.Hour
 
 type turnRunner struct {
 	opts          ProviderOpts
 	imageProvider image.Provider
-	timeout       time.Duration
 	retries       int
 	native        bool
 }
 
 func newTurnRunner(opts ProviderOpts) *turnRunner {
-	r := &turnRunner{opts: opts, imageProvider: opts.ImageProvider, timeout: opts.TurnTimeout, retries: opts.Retries}
-	if r.timeout == 0 {
-		r.timeout = 15 * time.Minute
-	}
+	r := &turnRunner{opts: opts, imageProvider: opts.ImageProvider, retries: opts.Retries}
 	if r.retries == 0 {
 		r.retries = 2
 	}
@@ -65,6 +62,9 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 	sandboxID, meta, err := r.resolveSandbox(&input, runID)
 	if err != nil {
 		return TurnResult{}, err
+	}
+	if input.Fn == PresignFn {
+		return r.presign(ctx, sandboxID)
 	}
 	req := TurnRequest{
 		SandboxName:  "brickie-" + sandboxID,
@@ -190,6 +190,25 @@ func (r *turnRunner) list(input TurnInput) (TurnResult, error) {
 	return TurnResult{Output: out}, nil
 }
 
+func (r *turnRunner) presign(ctx context.Context, sandboxID string) (TurnResult, error) {
+	var out any
+	if r.opts.Staging == nil {
+		out = map[string]any{"error": map[string]string{"code": "staging_failed", "message": "the provider has no --object-store; files larger than --max-file-bytes cannot be staged"}}
+	} else {
+		key := r.opts.Staging.NewKey(sandboxID)
+		putURL, getURL, err := r.opts.Staging.Presign(ctx, key)
+		if err != nil {
+			return TurnResult{}, fmt.Errorf("presign staging key: %w", err)
+		}
+		out = map[string]any{"stagedKey": key, "putUrl": putURL, "getUrl": getURL, "expiresInMs": stagingURLExpiry.Milliseconds()}
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return TurnResult{}, err
+	}
+	return TurnResult{Output: b, SandboxID: sandboxID}, nil
+}
+
 func matches(have, want map[string]string) bool {
 	for k, v := range want {
 		if have[k] != v {
@@ -197,18 +216,6 @@ func matches(have, want map[string]string) bool {
 		}
 	}
 	return true
-}
-
-func NewProviderTask(client *hatchet.Client, opts ProviderOpts) *hatchet.StandaloneTask {
-	runner := newTurnRunner(opts)
-	return client.NewStandaloneTask(TaskName, func(ctx hatchet.Context, input TurnInput) (TurnResult, error) {
-		runID := ctx.WorkflowRunId()
-		log := func(msg string) {
-			fmt.Fprintf(os.Stderr, "brickie: [%s] %s\n", runID, msg)
-			ctx.Log(msg)
-		}
-		return runner.run(ctx, runID, input, log)
-	}, hatchet.WithExecutionTimeout(runner.timeout), hatchet.WithRetries(runner.retries))
 }
 
 func orNone(s string) string {

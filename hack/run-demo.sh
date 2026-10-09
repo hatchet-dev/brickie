@@ -8,17 +8,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 DEMO=demo
-DRIVER=${BRICKIE_DRIVER:-docker}
-while [ $# -gt 0 ]; do
-  case "$1" in
-    fs) DEMO=fs-demo ;;
-    --driver) DRIVER=$2; shift ;;
-    *) echo "usage: hack/run-demo.sh [--driver docker|sbx] [fs]" >&2; exit 1 ;;
-  esac
-  shift
-done
-case "$DRIVER" in docker|sbx) ;; *) echo "error: unknown driver $DRIVER (docker|sbx)" >&2; exit 1 ;; esac
-export BRICKIE_DRIVER=$DRIVER
+case "${1:-}" in
+  "") ;;
+  fs) DEMO=fs-demo ;;
+  *) echo "usage: hack/run-demo.sh [fs]" >&2; exit 1 ;;
+esac
 
 TENANT_ID=707d0855-80ab-4e1f-a156-f1c4546cbf52
 STATE_DIR="$HOME/.brickie"
@@ -61,55 +55,9 @@ for bin in docker node pnpm; do
   command -v "$bin" >/dev/null || { echo "error: $bin is required" >&2; exit 1; }
 done
 docker info >/dev/null 2>&1 || { echo "error: start Docker first" >&2; exit 1; }
-ok "docker is running (sandbox driver: $DRIVER)"
+ok "docker is running"
 mkdir -p "$STATE_DIR"
 
-if [ "$DRIVER" != sbx ]; then
-  :
-elif command -v sbx >/dev/null; then
-  ok "sbx (Docker Sandboxes CLI) is installed"
-else
-  if [ "$(uname -s)" != "Darwin" ]; then
-    echo "error: Docker Sandboxes (sbx) is required: https://docs.docker.com/ai/sandboxes/" >&2
-    exit 1
-  fi
-  command -v brew >/dev/null || { echo "error: Homebrew is required to install sbx: https://brew.sh" >&2; exit 1; }
-  confirm "brickie runs every agent turn in a Docker Sandboxes micro-VM, so we install Docker's sbx CLI" \
-    "brew trust docker/tap && brew install docker/tap/sbx"
-  brew trust docker/tap
-  brew install docker/tap/sbx
-fi
-
-if [ "$DRIVER" != sbx ]; then
-  :
-elif sbx ls >/dev/null 2>&1; then
-  ok "signed in to Docker Sandboxes"
-else
-  confirm "sandboxes are tied to your Docker account, so we sign you in (opens a browser)" \
-    "sbx login"
-  sbx login
-fi
-
-if [ "$DRIVER" != sbx ]; then
-  :
-elif sbx policy ls 2>/dev/null | grep -q "balanced\|local-policy"; then
-  ok "sandbox network policy is in place"
-else
-  confirm "sandboxes get a default-deny network policy; 'balanced' allows package registries and model APIs" \
-    "sbx policy init balanced"
-  sbx policy init balanced
-fi
-
-if [ "$DRIVER" != sbx ]; then
-  :
-elif [ -f "$STATE_DIR/claude-authed" ]; then
-  ok "claude is authenticated inside sandboxes"
-else
-  confirm "sandboxes need access to Claude, and the credential is stored inside the sandbox layer — never in your shell (opens a browser)" \
-    "sbx run claude -- auth login"
-  sbx run claude -- auth login
-  touch "$STATE_DIR/claude-authed"
-fi
 
 EXTERNAL_HATCHET=""
 if [ -f .env ] && grep -q HATCHET_CLIENT_TOKEN .env; then
@@ -131,6 +79,7 @@ fi
 
 if [ -f .env ] && grep -q HATCHET_CLIENT_TOKEN .env; then
   ok "hatchet token is in .env"
+  grep -q BRICKIE_OBJECT_STORE .env || echo "BRICKIE_OBJECT_STORE=file://$STATE_DIR/staging" >> .env
 else
   confirm "your programs and the sandbox provider authenticate to Hatchet with a token; we mint one and store it only in .env (mode 0600, git-ignored)" \
     "docker compose exec hatchet ./hatchet-admin token create ... >> .env"
@@ -139,6 +88,7 @@ else
   {
     echo "HATCHET_CLIENT_TOKEN=$TOKEN"
     echo "HATCHET_CLIENT_TLS_STRATEGY=none"
+    echo "BRICKIE_OBJECT_STORE=file://$STATE_DIR/staging"
   } >> .env
   umask 022
 fi
@@ -160,7 +110,7 @@ fi
 provider_alive() { [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; }
 provider_gone() { ! provider_alive; }
 
-STRAY=$(pgrep -f "$PWD/bin/brickie worker" | grep -vx "$(cat "$PID_FILE" 2>/dev/null || echo 0)" || true)
+STRAY=$(pgrep -f "bin/brickie worker" | grep -vx "$(cat "$PID_FILE" 2>/dev/null || echo 0)" || true)
 if [ -n "$STRAY" ]; then
   confirm "a sandbox provider from an earlier run is still running without a pid file; two providers would split one sandbox's turns, so we stop it" \
     "kill $STRAY"
@@ -171,7 +121,7 @@ if provider_alive && [ -z "$REBUILT" ] && [ ! .env -nt "$PID_FILE" ]; then
   ok "sandbox provider is already running"
 else
   confirm "the provider runs on this machine and talks to the local Docker engine; we run it in the background" \
-    "BRICKIE_DRIVER=$DRIVER ./bin/brickie worker  # logs: $LOG_FILE"
+    "./bin/brickie worker  # logs: $LOG_FILE"
   if provider_alive; then
     kill "$(cat "$PID_FILE")" 2>/dev/null || true
     spin_until "waiting for the old provider to shut down cleanly" 15 provider_gone || kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
@@ -184,7 +134,7 @@ else
   echo $! > "$PID_FILE"
   provider_connected() {
     provider_alive || { echo; echo "error: provider exited; see $LOG_FILE" >&2; tail -5 "$LOG_FILE" >&2; exit 1; }
-    grep -q "connected as grpc operator\|sandbox provider started" "$LOG_FILE" 2>/dev/null
+    grep -q "connected as grpc operator" "$LOG_FILE" 2>/dev/null
   }
   if ! spin_until "waiting for the provider to connect to hatchet" 30 provider_connected; then
     echo "error: provider did not connect within 30s; see $LOG_FILE" >&2
@@ -208,7 +158,8 @@ cat <<EOF
     dashboard   ${EXTERNAL_HATCHET:+your hatchet instance}${EXTERNAL_HATCHET:-http://localhost:8888  (admin@example.com / Admin123!!)}
     provider    tail -f $LOG_FILE   (stop: kill \$(cat $PID_FILE))
     token       .env (HATCHET_CLIENT_TOKEN, mode 0600)
-    sandboxes   $([ "$DRIVER" = sbx ] && echo "Docker Sandboxes micro-VMs" || echo "plain Docker containers (alpine:3); use --driver sbx for micro-VM isolation")
+    staging     $STATE_DIR/staging (files over 2 MiB bypass Hatchet through it)
+    sandboxes   Docker containers (alpine:3) on the local engine
                 no host env vars are injected
 
   write your own programs: export the variables from .env and use the
@@ -234,7 +185,6 @@ if [ "${BRICKIE_YES:-}" != "1" ] && [ -t 0 ]; then
 
   demo later:     hack/run-demo.sh
   file demo:      hack/run-demo.sh fs
-  micro-VMs:      hack/run-demo.sh --driver sbx
   stop provider:  kill \$(cat $PID_FILE)
   stop hatchet:   docker compose down
 

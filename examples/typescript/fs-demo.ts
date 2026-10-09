@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { FilesystemError } from '@hatchet/sandbox';
 import { initClient } from './client.js';
 
@@ -22,6 +23,21 @@ async function main() {
 
     await sandbox.files.remove('backup');
     console.log('exists  ', await sandbox.files.exists('backup'));
+
+    const mb = Number(process.env.DEMO_BIG_MB ?? 5);
+    const big = randomBytes(mb << 20);
+    const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex').slice(0, 12);
+    try {
+      let t = Date.now();
+      await sandbox.files.write('big.bin', big);
+      const wrote = Date.now() - t;
+      t = Date.now();
+      const back = await sandbox.files.read('big.bin', { format: 'bytes' });
+      console.log('big     ', `${mb} MiB write ${wrote}ms read ${Date.now() - t}ms`, sha(big) === sha(back) ? 'sha256 match' : 'SHA256 MISMATCH');
+    } catch (err) {
+      if (!(err instanceof FilesystemError)) throw err;
+      console.log('big     ', `${err.code}: ${err.message}`);
+    }
 
     try {
       await sandbox.files.read('../outside');

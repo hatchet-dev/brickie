@@ -38,7 +38,7 @@ export interface CommandResult extends Timings {
 export interface SandboxOpts {
   /** Sandbox ID to use instead of a generated one. Lowercase letters, digits, and hyphens; must be new on the provider. */
   id?: string;
-  /** Container image (`docker` driver) or Docker Sandboxes template (`sbx` driver). Defaults to the provider's image. */
+  /** Container image. Defaults to the provider's image. */
   template?: string;
   /** Snapshot to start from. Two sandboxes with the same `from` are a fork. */
   from?: string;
@@ -46,6 +46,11 @@ export interface SandboxOpts {
   metadata?: Record<string, string>;
   /** Milliseconds without a turn before the provider removes the sandbox. Capped by the provider. */
   idleTimeoutMs?: number;
+}
+
+export interface ExecOpts {
+  /** Kill the command after this long. The result then has `exitCode` 124. */
+  timeoutMs?: number;
 }
 
 export interface ConnectOpts {
@@ -134,9 +139,9 @@ export class Sandbox {
     return raw.map((s) => ({ ...s, createdAt: new Date(s.createdAt), lastUsed: s.lastUsed ? new Date(s.lastUsed) : undefined }));
   }
 
-  /** Runs a shell command with `sh -c` in the workspace and makes a snapshot. */
-  async exec(cmd: string): Promise<CommandResult> {
-    return this.turn<CommandResult>('$command', { cmd });
+  /** Runs a shell command with `sh -c` in the workspace and makes a snapshot. A timeout gives `exitCode` 124, not an error. */
+  async exec(cmd: string, opts: ExecOpts = {}): Promise<CommandResult> {
+    return this.turn<CommandResult>('$command', { cmd, ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}) });
   }
 
   /** Removes the sandbox. Its snapshots stay; `connect` can bring it back. */

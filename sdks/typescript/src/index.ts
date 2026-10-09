@@ -3,6 +3,7 @@ export {
   type SandboxNamespace,
   type SandboxOpts,
   type ConnectOpts,
+  type ExecOpts,
   type SandboxListOpts,
   type SandboxInfo,
   type CommandResult,
@@ -18,4 +19,5 @@ export {
   type WriteEntry,
   type ReadOpts,
   type ListOpts,
+  type TransferOpts,
 } from './files.js';

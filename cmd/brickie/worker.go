@@ -2,20 +2,16 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/hatchet-dev/hatchet/pkg/cmdutils"
-	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
-	hatchetotel "github.com/hatchet-dev/hatchet/sdks/go/opentelemetry"
 	"github.com/spf13/cobra"
 
 	"github.com/hatchet-dev/brickie/internal/driver/docker"
-	"github.com/hatchet-dev/brickie/internal/driver/local"
-	"github.com/hatchet-dev/brickie/internal/driver/sbx"
+	"github.com/hatchet-dev/brickie/internal/driver/fsops"
 	"github.com/hatchet-dev/brickie/internal/engine"
 	"github.com/hatchet-dev/brickie/internal/image"
 )
@@ -29,6 +25,15 @@ func envDurationOr(key string, fallback time.Duration) time.Duration {
 	return fallback
 }
 
+func envInt64Or(key string, fallback int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -37,28 +42,20 @@ func envOr(key, fallback string) string {
 }
 
 type providerConfig struct {
-	driver      string
 	image       string
 	snapshotDir string
-	turnTimeout time.Duration
 	idleTTL     time.Duration
 	maxIdleTTL  time.Duration
+	maxFile     int64
+	objectStore string
 	slots       int
 }
 
 var providerCfg providerConfig
 
 func (c providerConfig) registerFlags(cmd *cobra.Command) {
-	defaultTimeout := 15 * time.Minute
-	if v := os.Getenv("BRICKIE_TURN_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			defaultTimeout = d
-		}
-	}
-	cmd.Flags().StringVar(&providerCfg.driver, "driver", envOr("BRICKIE_DRIVER", "docker"), "sandbox driver: docker (plain containers) or sbx (Docker Sandboxes micro-VMs)")
-	cmd.Flags().StringVar(&providerCfg.image, "image", envOr("BRICKIE_SANDBOX_IMAGE", ""), "default sandbox image (docker: a container image, default alpine:3; sbx: a template, default claude)")
+	cmd.Flags().StringVar(&providerCfg.image, "image", envOr("BRICKIE_SANDBOX_IMAGE", "alpine:3"), "default sandbox image")
 	cmd.Flags().StringVar(&providerCfg.snapshotDir, "snapshot-dir", envOr("BRICKIE_SNAPSHOT_DIR", engine.DefaultSnapshotDir()), "snapshot storage directory")
-	cmd.Flags().DurationVar(&providerCfg.turnTimeout, "turn-timeout", defaultTimeout, "execution timeout per sandbox turn")
 	defaultSlots := 10
 	if v := os.Getenv("BRICKIE_SLOTS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -74,64 +71,46 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 	}
 	cmd.Flags().DurationVar(&providerCfg.idleTTL, "sandbox-idle-ttl", defaultIdle, "destroy a sandbox after this long without a turn")
 	cmd.Flags().DurationVar(&providerCfg.maxIdleTTL, "max-sandbox-idle-ttl", envDurationOr("BRICKIE_MAX_SANDBOX_IDLE_TTL", 24*time.Hour), "longest idle ttl a sandbox may ask for at create")
+	cmd.Flags().StringVar(&providerCfg.objectStore, "object-store", envOr("BRICKIE_OBJECT_STORE", ""), "object store URL that carries files larger than --max-file-bytes between the SDK and sandboxes: s3://bucket, gs://bucket, azblob://container, or s3://bucket?endpoint=...&use_path_style=true for S3-compatible stores")
+	cmd.Flags().Int64Var(&providerCfg.maxFile, "max-file-bytes", envInt64Or("BRICKIE_MAX_FILE_BYTES", fsops.DefaultMaxFileBytes), "largest file files.read and files.write carry through a Hatchet task; the engine must allow the base64 payload (SERVER_GRPC_MAX_MSG_SIZE, default 4 MiB)")
 }
 
 func runProvider(ctx context.Context, c providerConfig) error {
 	store := engine.FSSnapshotStore{Dir: c.snapshotDir}
 	store.Prune(7 * 24 * time.Hour)
-	var backend local.Backend
-	defaultImage := c.image
-	switch c.driver {
-	case "docker":
-		if defaultImage == "" {
-			defaultImage = "alpine:3"
-		}
-		b, err := docker.New()
+	if c.maxFile > 3<<20 {
+		fmt.Fprintf(os.Stderr, "brickie: --max-file-bytes %d exceeds 3 MiB; set SERVER_GRPC_MAX_MSG_SIZE on the Hatchet engine to at least %d or file turns fail with a gRPC size error\n", c.maxFile, c.maxFile*4/3+1<<20)
+	}
+	var staging *engine.Staging
+	if c.objectStore != "" {
+		s, err := engine.OpenStaging(ctx, c.objectStore)
 		if err != nil {
 			return err
 		}
-		backend = b
-	case "sbx":
-		backend = sbx.New()
-	default:
-		return fmt.Errorf("unknown driver %q (docker|sbx)", c.driver)
+		defer func() { _ = s.Close() }()
+		staging = s
+		fmt.Fprintf(os.Stderr, "brickie: large files are staged through the object store\n")
 	}
-	driver := local.New(backend, c.idleTTL)
+	driver, err := docker.New(docker.Options{IdleTTL: c.idleTTL, MaxFileBytes: c.maxFile, Staging: stagingOrNil(staging)})
+	if err != nil {
+		return err
+	}
 	defer driver.Close()
 	opts := engine.ProviderOpts{
 		Driver:        driver,
 		Store:         store,
-		ImageProvider: image.Registry{Default: defaultImage},
-		TurnTimeout:   c.turnTimeout,
+		ImageProvider: image.Registry{Default: c.image},
 		MaxIdleTTL:    c.maxIdleTTL,
+		Staging:       staging,
 	}
-	err := engine.RunOperatorProvider(ctx, opts, c.slots)
-	if !errors.Is(err, engine.ErrOperatorUnavailable) {
-		return err
+	return engine.RunOperatorProvider(ctx, opts, c.slots)
+}
+
+func stagingOrNil(s *engine.Staging) fsops.Staging {
+	if s == nil {
+		return nil
 	}
-	fmt.Fprintf(os.Stderr, "brickie: %v; falling back to worker mode\n", err)
-	client, err := hatchet.NewClient()
-	if err != nil {
-		return err
-	}
-	task := engine.NewProviderTask(client, opts)
-	w, err := client.NewWorker("brickie-provider", hatchet.WithWorkflows(task), hatchet.WithSlots(c.slots))
-	if err != nil {
-		return err
-	}
-	if os.Getenv("BRICKIE_OTEL") != "false" {
-		instrumentor, err := hatchetotel.NewInstrumentor()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "brickie: opentelemetry disabled: %v\n", err)
-		} else {
-			w.Use(instrumentor.Middleware())
-			defer func() {
-				_ = instrumentor.Shutdown(context.Background())
-			}()
-		}
-	}
-	fmt.Fprintf(os.Stderr, "brickie: sandbox provider started (driver=%s)\n", c.driver)
-	return w.StartBlocking(ctx)
+	return s
 }
 
 func workerCmd() *cobra.Command {

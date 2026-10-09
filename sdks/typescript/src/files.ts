@@ -1,3 +1,4 @@
+import * as fs from 'node:fs/promises';
 import type { JsonObject } from '@hatchet-dev/typescript-sdk/v1';
 
 export type FileType = 'file' | 'dir' | 'symlink';
@@ -24,11 +25,17 @@ export interface ReadOpts {
   format?: 'text' | 'bytes' | 'blob';
 }
 
+export interface TransferOpts {
+  /** Give up after this long. */
+  timeoutMs?: number;
+}
+
 export interface ListOpts {
   depth?: number;
 }
 
 export type FilesystemErrorCode =
+  | 'staging_failed'
   | 'not_found'
   | 'invalid_path'
   | 'invalid_url'
@@ -54,6 +61,10 @@ type RawEntry = Omit<EntryInfo, 'modifiedTime'> & { modifiedTime?: string };
 
 interface FsOutput extends JsonObject {
   content?: string;
+  stagedKey?: string;
+  url?: string;
+  putUrl?: string;
+  getUrl?: string;
   entry?: RawEntry | null;
   entries?: RawEntry[];
   created?: boolean;
@@ -68,11 +79,34 @@ const toEntry = (e: RawEntry): EntryInfo => ({
   modifiedTime: e.modifiedTime ? new Date(e.modifiedTime) : undefined,
 });
 
-async function toBase64(data: FileData): Promise<string> {
-  if (typeof data === 'string') return Buffer.from(data, 'utf8').toString('base64');
-  if (data instanceof Blob) return Buffer.from(await data.arrayBuffer()).toString('base64');
-  if (data instanceof Uint8Array) return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('base64');
-  return Buffer.from(data).toString('base64');
+const STAGE_OVER_BYTES = 2 << 20;
+
+async function toBytes(data: FileData): Promise<Buffer> {
+  if (typeof data === 'string') return Buffer.from(data, 'utf8');
+  if (data instanceof Blob) return Buffer.from(await data.arrayBuffer());
+  if (data instanceof Uint8Array) return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  return Buffer.from(data);
+}
+
+async function putStaged(url: string, bytes: Buffer): Promise<void> {
+  if (url.startsWith('file://')) {
+    await fs.writeFile(decodeURIComponent(url.slice('file://'.length)), bytes);
+    return;
+  }
+  const res = await fetch(url, { method: 'PUT', body: new Uint8Array(bytes), headers: { 'Content-Type': 'application/octet-stream' } });
+  if (!res.ok) throw new FilesystemError('staging_failed', `stage upload failed: HTTP ${res.status}`);
+}
+
+async function getStaged(url: string): Promise<Buffer> {
+  if (url.startsWith('file://')) {
+    const path = decodeURIComponent(url.slice('file://'.length));
+    const bytes = await fs.readFile(path);
+    await fs.rm(path, { force: true });
+    return bytes;
+  }
+  const res = await fetch(url);
+  if (!res.ok) throw new FilesystemError('staging_failed', `stage download failed: HTTP ${res.status}`);
+  return Buffer.from(await res.arrayBuffer());
 }
 /** File operations on a sandbox workspace. Paths are relative to the workspace. Each call is one Hatchet task. */
 export class Files {
@@ -85,19 +119,19 @@ export class Files {
     return out;
   }
 
-  /** Reads a file as text (default), bytes, or a Blob. Files over 2 MiB must use `download` or `exec` instead. */
+  /** Reads a file as text (default), bytes, or a Blob. Files over the provider's `--max-file-bytes` (2 MiB) come through the provider's object store instead of Hatchet. */
   read(path: string, opts?: ReadOpts & { format?: 'text' }): Promise<string>;
   read(path: string, opts: ReadOpts & { format: 'bytes' }): Promise<Uint8Array>;
   read(path: string, opts: ReadOpts & { format: 'blob' }): Promise<Blob>;
   async read(path: string, opts: ReadOpts = {}): Promise<string | Uint8Array | Blob> {
-    const { content = '' } = await this.call('read', { path });
-    const bytes = Buffer.from(content, 'base64');
+    const out = await this.call('read', { path });
+    const bytes = out.url ? await getStaged(out.url) : Buffer.from(out.content ?? '', 'base64');
     if (opts.format === 'bytes') return new Uint8Array(bytes);
     if (opts.format === 'blob') return new Blob([new Uint8Array(bytes)]);
     return bytes.toString('utf8');
   }
 
-  /** Writes one file or several. Parent directories are created. Bytes are stored exactly. */
+  /** Writes one file or several. Parent directories are created. Bytes are stored exactly. Files over 2 MiB go through the provider's object store instead of Hatchet. */
   write(path: string, data: FileData): Promise<EntryInfo>;
   write(files: WriteEntry[]): Promise<EntryInfo[]>;
   async write(pathOrFiles: string | WriteEntry[], data?: FileData): Promise<EntryInfo | EntryInfo[]> {
@@ -108,7 +142,15 @@ export class Files {
 
   /** Writes several files in one task. */
   async writeFiles(files: WriteEntry[]): Promise<EntryInfo[]> {
-    const encoded = await Promise.all(files.map(async (f) => ({ path: f.path, content: await toBase64(f.data) })));
+    const encoded = await Promise.all(
+      files.map(async (f) => {
+        const bytes = await toBytes(f.data);
+        if (bytes.length <= STAGE_OVER_BYTES) return { path: f.path, content: bytes.toString('base64') };
+        const { stagedKey, putUrl } = await this.call('presign', {});
+        await putStaged(putUrl!, bytes);
+        return { path: f.path, stagedKey: stagedKey! };
+      })
+    );
     const { entries = [] } = await this.call('write', { files: encoded });
     return entries.map(toEntry);
   }
@@ -154,13 +196,13 @@ export class Files {
   async remove(path: string): Promise<void> {
     await this.call('remove', { path });
   }
-  /** Fetches a URL into the workspace with `curl` inside the sandbox. Use for large files; the image needs `curl`. */
-  async download(url: string, path: string): Promise<EntryInfo> {
-    const { entry } = await this.call('download', { url, path });
+  /** The provider fetches an https URL into the workspace. The sandbox needs no network. Private and loopback addresses are refused. */
+  async download(url: string, path: string, opts: TransferOpts = {}): Promise<EntryInfo> {
+    const { entry } = await this.call('download', { url, path, ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}) });
     return toEntry(entry!);
   }
-  /** Sends a workspace file to a URL with HTTP PUT from inside the sandbox, for example to a presigned URL. */
-  async upload(path: string, url: string): Promise<void> {
-    await this.call('upload', { path, url });
+  /** The provider sends a workspace file to an https URL with HTTP PUT, for example a presigned URL. */
+  async upload(path: string, url: string, opts: TransferOpts = {}): Promise<void> {
+    await this.call('upload', { path, url, ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}) });
   }
 }

@@ -2,13 +2,12 @@
 
 brickie runs agent sandboxes as Hatchet tasks.
 
-A sandbox is a Docker container, or a Docker Sandboxes micro-VM. Each call on a sandbox is one Hatchet task. Each call that changes the workspace makes a snapshot. A snapshot does not change. Any snapshot can start a new sandbox. A sandbox can be continued later by its ID.
+A sandbox is a Docker container. Each call on a sandbox is one Hatchet task. Each call that changes the workspace makes a snapshot. A snapshot does not change. Any snapshot can start a new sandbox. A sandbox can be continued later by its ID.
 
 ## Requirements
 
 - Docker.
 - Node and pnpm.
-- For the `sbx` driver: Docker Desktop on macOS and Homebrew.
 
 ## Run the demo
 
@@ -44,22 +43,22 @@ await again.exec('cat haiku.txt');
 ```
 
 - `hatchet.sandbox.create(options)` starts a sandbox. `connect(id)` continues one. `list({ metadata })` finds them.
-- `sandbox.exec(cmd)` runs a shell command. `sandbox.files` reads and writes files. `sandbox.kill()` removes the sandbox.
+- `sandbox.exec(cmd, { timeoutMs })` runs a shell command. A timeout returns exit code 124. `sandbox.files` reads and writes files. `sandbox.kill()` removes the sandbox.
+- `files.read` and `files.write` carry up to `--max-file-bytes` (2 MiB) through a Hatchet task. Larger files go through the provider's `--object-store` and never enter Hatchet. On a laptop that is a directory (`file://`); in production, S3, GCS, or Azure Blob. `files.download` and `files.upload` move files between the workspace and an https URL. The sandbox needs no network for any of this.
 - In a durable task, each call is a step in the event log. Outside one, each call is a plain task run.
 
 The full reference is in TypeDoc. Run `pnpm docs` in `sdks/typescript` and open `sdks/typescript/docs/index.html`.
 
-## Drivers
+## Isolation
 
-Set `--driver` or `BRICKIE_DRIVER` on the provider.
+On a laptop, a sandbox is a plain container on the local Docker engine. Good for development and CI. It is not a VM. For untrusted agents, run brickie on Kubernetes with gVisor or Kata Containers.
 
-- `docker` (default): a plain container on any Docker engine. Good for development and CI. It is not a VM.
-- `sbx`: a Docker Sandboxes micro-VM. macOS only. Use it for untrusted agents. Start with `hack/run-demo.sh --driver sbx`.
+Each container runs [`sandboxd`](https://github.com/kubernetes-sigs/agent-sandbox/blob/main/packages/sandboxd/USER_GUIDE.md), the agent-sandbox runtime daemon, as its process. The provider injects the binary and talks to it on a loopback port. The daemon starts commands, streams their output, and kills the whole process group on a timeout. The image needs only `sh`, and `tar` for restore.
 
-No host environment variables reach a sandbox on either driver. The provider removes a sandbox after `--sandbox-idle-ttl` without a call. The sandbox's snapshots stay, so `connect` can bring it back.
+No host environment variables reach a sandbox. The provider removes a sandbox after `--sandbox-idle-ttl` without a call, or after the `idleTimeoutMs` given at create. Its snapshots stay, so `connect` can bring it back.
 
 ## Use an external Hatchet instance
 
-1. Get a token from the tenant.
+1. Get a token from the tenant. The tenant needs gRPC operators enabled and Hatchet v0.110 or newer.
 2. Put it in `.env` as `HATCHET_CLIENT_TOKEN`. Remove the line `HATCHET_CLIENT_TLS_STRATEGY=none`.
 3. Run `hack/run-demo.sh` again. It does not start the local Hatchet.
