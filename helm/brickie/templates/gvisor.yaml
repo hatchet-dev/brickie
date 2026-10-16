@@ -1,0 +1,103 @@
+{{- if .Values.gvisor.install }}
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+  labels:
+    {{- include "brickie.labels" . | nindent 4 }}
+handler: runsc
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "brickie.fullname" . }}-gvisor
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "brickie.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gvisor-installer
+spec:
+  selector:
+    matchLabels:
+      {{- include "brickie.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gvisor-installer
+  template:
+    metadata:
+      labels:
+        {{- include "brickie.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: gvisor-installer
+    spec:
+      hostPID: true
+      tolerations:
+        - operator: Exists
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: installer
+          image: alpine:3.22
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: host
+              mountPath: /host
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/gvisor-ready"]
+            periodSeconds: 5
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              apk add --no-cache util-linux >/dev/null
+              CONFIG=/host/etc/containerd/config.toml
+              install_binaries() {
+                [ -x /host/usr/local/bin/runsc ] && [ -x /host/usr/local/bin/containerd-shim-runsc-v1 ] && return 0
+                ARCH=$(uname -m)
+                BASE=https://storage.googleapis.com/gvisor/releases/release/{{ .Values.gvisor.release }}/$ARCH
+                cd /tmp
+                for f in runsc containerd-shim-runsc-v1; do
+                  wget -q $BASE/$f -O $f
+                  wget -q $BASE/$f.sha512 -O $f.sha512
+                  sha512sum -c $f.sha512
+                  chmod +x $f
+                  mv $f /host/usr/local/bin/$f
+                  rm -f $f.sha512
+                done
+              }
+              effective() {
+                chroot /host containerd config dump 2>/dev/null | grep -q 'runtimes.runsc'
+              }
+              apply_config() {
+                if grep -Eq '^version *= *3' $CONFIG 2>/dev/null; then
+                  TABLE='io.containerd.cri.v1.runtime'
+                elif grep -Eq '^version *= *2' $CONFIG 2>/dev/null; then
+                  TABLE='io.containerd.grpc.v1.cri'
+                elif chroot /host containerd --version 2>/dev/null | grep -Eq 'containerd/v2|containerd v2| v2\.'; then
+                  TABLE='io.containerd.cri.v1.runtime'
+                else
+                  TABLE='io.containerd.grpc.v1.cri'
+                fi
+                if ! grep -q 'runtimes.runsc' $CONFIG 2>/dev/null; then
+                  printf '\n[plugins."%s".containerd.runtimes.runsc]\n  runtime_type = "io.containerd.runsc.v1"\n' "$TABLE" >> $CONFIG
+                fi
+                nsenter -t 1 -m -- systemctl restart containerd
+              }
+              install_binaries
+              while true; do
+                if effective; then
+                  touch /tmp/gvisor-ready
+                else
+                  rm -f /tmp/gvisor-ready
+                  echo "runsc missing from effective containerd config; applying"
+                  apply_config
+                fi
+                sleep 30
+              done
+      volumes:
+        - name: host
+          hostPath:
+            path: /
+            type: Directory
+{{- end }}

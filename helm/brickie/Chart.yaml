@@ -1,0 +1,13 @@
+apiVersion: v2
+name: brickie
+description: Hatchet sandbox provider. Runs agent sandboxes as Hatchet tasks on Kubernetes, one isolated pod per sandbox, with agent-sandbox and Kata Containers bundled.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+dependencies:
+  - name: agent-sandbox
+    version: 0.1.0
+    condition: agent-sandbox.enabled
+  - name: kata-deploy
+    version: 4.2.0
+    condition: kata-deploy.enabled

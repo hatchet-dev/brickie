@@ -1,0 +1,17 @@
+apiVersion: v2
+name: agent-sandbox
+description: Kubernetes controller for managing agent sandboxes
+appVersion: v1.0.4
+type: application
+version: 0.1.0
+keywords:
+  - agent
+  - sandbox
+  - kubernetes
+home: https://github.com/kubernetes-sigs/agent-sandbox
+sources:
+  - https://github.com/kubernetes-sigs/agent-sandbox
+maintainers:
+  - name: Kubernetes SIGs
+    url: https://github.com/kubernetes-sigs
+appVersion: v1.0.4

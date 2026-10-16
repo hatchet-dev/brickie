@@ -1,0 +1,68 @@
+replicaCount: 1
+slots: 10
+
+image:
+  repository: ghcr.io/hatchet-dev/brickie
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  annotations: {}
+
+hatchet:
+  token: ""
+  existingSecret: ""
+
+sandbox:
+  namespace: ""
+  image: alpine:3
+  idleTTL: 30m
+  maxIdleTTL: 24h
+  maxFileBytes: 2097152
+  runtime: kata
+  credentials: {}
+  existingCredentialsSecret: ""
+  credentialNames: []
+  warmImages: []
+  warmReplicas: 2
+
+objectStore: ""
+objectStoreSecret: ""
+
+networkPolicy:
+  enabled: true
+  allowDNS: true
+  egressCIDRs: []
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+
+agent-sandbox:
+  enabled: true
+  image:
+    tag: v1.0.4
+  controller:
+    extensions: true
+
+kata-deploy:
+  enabled: true
+  deploymentMode: daemonset
+  priorityClassName: ""
+  k8sDistribution: k8s
+  shims:
+    disableAll: true
+    clh:
+      enabled: true
+  defaultShim:
+    amd64: clh
+  runtimeClasses:
+    enabled: true
+  node-feature-discovery:
+    enabled: false
+
+gvisor:
+  install: false
+  release: "20260907.0"

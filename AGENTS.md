@@ -11,6 +11,8 @@ brickie runs agent sandboxes as Hatchet durable tasks. The README covers how to 
 - `sdks/typescript`: the client SDK; `examples/typescript`: the demo session
 - `docker-compose.yml`: Hatchet lite v0.110.5 + Postgres with gRPC operators enabled; the provider runs on the host and talks to the local Docker engine
 - `hack/run-demo.sh`: first-run setup + the demo session; also the end-to-end check
+- `helm/brickie/`: the Kubernetes chart; subcharts (agent-sandbox, kata-deploy) are vendored under `charts/` so the chart installs with no external repositories; `values.schema.json` stays in sync with `values.yaml` and keeps `additionalProperties: false`
+- `Dockerfile`: the provider image the chart deploys
 
 ## Build and check
 

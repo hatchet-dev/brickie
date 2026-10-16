@@ -57,6 +57,18 @@ Each container runs [`sandboxd`](https://github.com/kubernetes-sigs/agent-sandbo
 
 No host environment variables reach a sandbox. The provider removes a sandbox after `--sandbox-idle-ttl` without a call, or after the `idleTimeoutMs` given at create. Its snapshots stay, so `connect` can bring it back.
 
+## Run on Kubernetes
+
+The Helm chart in `helm/brickie` installs the provider and everything it needs: agent-sandbox for sandbox pods and warm pools, Kata Containers (the default runtime, one micro-VM per sandbox), and a NetworkPolicy for sandbox pods. All subcharts are bundled.
+
+```bash
+helm upgrade --install brickie ./helm/brickie --namespace brickie --create-namespace \
+  --set hatchet.token=$HATCHET_CLIENT_TOKEN \
+  --set objectStore=s3://my-bucket/brickie
+```
+
+What to set up first (nodes with KVM, a bucket and its IAM role, a CNI that enforces NetworkPolicy, a Hatchet tenant with gRPC operators) is in [helm/brickie/README.md](helm/brickie/README.md).
+
 ## Use an external Hatchet instance
 
 1. Get a token from the tenant. The tenant needs gRPC operators enabled and Hatchet v0.110 or newer.
