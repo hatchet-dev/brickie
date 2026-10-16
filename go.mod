@@ -13,7 +13,7 @@ require (
 	gocloud.dev v0.46.0
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
-	sigs.k8s.io/agent-sandbox v1.0.4
+	sigs.k8s.io/agent-sandbox v1.0.7
 )
 
 require (

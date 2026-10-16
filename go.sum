@@ -380,5 +380,5 @@ gotest.tools/v3 v3.5.2 h1:7koQfIKdy+I8UTetycgUqXWSDwpgv193Ka+qRsmBY8Q=
 gotest.tools/v3 v3.5.2/go.mod h1:LtdLGcnqToBH83WByAAi/wiwSFCArdFIUV/xxN4pcjA=
 pgregory.net/rapid v1.2.0 h1:keKAYRcjm+e1F0oAuU5F5+YPAWcyxNNRK2wud503Gnk=
 pgregory.net/rapid v1.2.0/go.mod h1:PY5XlDGj0+V1FCq0o192FdRhpKHGTRIWBgqjDBTrq04=
-sigs.k8s.io/agent-sandbox v1.0.4 h1:MAOkV7rSZLP8xEbTAQ//l7Rk3QOrhjxq564Cr8B/9ZQ=
-sigs.k8s.io/agent-sandbox v1.0.4/go.mod h1:hameABtFCY7MYFMHCJYPnntRZrPpCxDW50FHAtv8Twk=
+sigs.k8s.io/agent-sandbox v1.0.7 h1:+62/DTFUV2Nl0vgwiYQra8wdJ+NCzbg0k65Io7Y7IYo=
+sigs.k8s.io/agent-sandbox v1.0.7/go.mod h1:rvELUpSuuSLS/PU2R1a/C2j0hYyGgY7Fkk2gReZMfSA=

@@ -27,7 +27,7 @@ import (
 
 // sandboxdImage is pinned by index digest: upstream publishes only a moving
 // latest-main tag from its staging registry.
-const sandboxdImage = "us-central1-docker.pkg.dev/k8s-staging-images/agent-sandbox/sandboxd@sha256:48390a8888d7abf2b3ba471ecb53cc37e11ed370da15c69ee76881962bc9e634"
+const sandboxdImage = "us-central1-docker.pkg.dev/k8s-staging-images/agent-sandbox/sandboxd@sha256:3ce625efaf57128f3b56e38ebf713f277fbef06095ebf1c88b1a844e2a47f6ed"
 
 const (
 	sandboxdPath     = "/sandboxd"

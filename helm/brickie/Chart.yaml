@@ -4,9 +4,15 @@ description: Hatchet sandbox provider. Runs agent sandboxes as Hatchet tasks on 
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
+home: https://github.com/hatchet-dev/brickie
+sources:
+  - https://github.com/hatchet-dev/brickie
+maintainers:
+  - name: Hatchet Engineering
+    email: support@hatchet.run
 dependencies:
   - name: agent-sandbox
-    version: 0.1.0
+    version: 0.1.2
     condition: agent-sandbox.enabled
   - name: kata-deploy
     version: 4.2.0
