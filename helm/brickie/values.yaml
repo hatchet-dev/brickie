@@ -136,6 +136,8 @@ kata-deploy:
     enabled: false
   # nodeSelector:
   #   brickie.hatchet.run/sandbox-node: "true"
+  # Leave verification.pod unset when nodeSelector is set: the upstream 4.2.0
+  # verification job expects every node in the cluster to carry the Kata label.
 
 # gVisor installer: a privileged DaemonSet that downloads the pinned release to
 # every node, registers runsc with containerd, and creates the gvisor

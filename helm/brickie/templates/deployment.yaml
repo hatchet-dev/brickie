@@ -1,12 +1,6 @@
 {{- if not (or .Values.hatchet.token .Values.hatchet.existingSecret) }}
 {{- fail "HATCHET_CLIENT_TOKEN is required: set hatchet.token or hatchet.existingSecret (a Secret containing the HATCHET_CLIENT_TOKEN key)" }}
 {{- end }}
-{{- if and (eq .Values.sandbox.runtime "kata") (not (index .Values "kata-deploy" "enabled")) }}
-{{- fail "sandbox.runtime is kata but kata-deploy.enabled is false: enable the bundled installer, or set sandbox.runtime to the runtime class your cluster provides" }}
-{{- end }}
-{{- if and (eq .Values.sandbox.runtime "gvisor") (not .Values.gvisor.install) }}
-{{- fail "sandbox.runtime is gvisor but gvisor.install is false: enable the bundled installer, or set sandbox.runtime to the runtime class your cluster provides" }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

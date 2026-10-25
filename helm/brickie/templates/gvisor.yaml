@@ -52,17 +52,20 @@ spec:
               set -e
               apk add --no-cache util-linux >/dev/null
               CONFIG=/host/etc/containerd/config.toml
+              RELEASE={{ .Values.gvisor.release | quote }}
+              STAMP=/host/usr/local/bin/.gvisor-release
               install_binaries() {
-                [ -x /host/usr/local/bin/runsc ] && [ -x /host/usr/local/bin/containerd-shim-runsc-v1 ] && return 0
+                [ -x /host/usr/local/bin/runsc ] && [ -x /host/usr/local/bin/containerd-shim-runsc-v1 ] && [ "$(cat $STAMP 2>/dev/null)" = "$RELEASE" ] && return 0
                 apk add --no-cache bzip2 >/dev/null
                 ARCH=$(uname -m)
-                BASE=https://storage.googleapis.com/gvisor/releases/release/{{ .Values.gvisor.release }}/$ARCH
+                BASE=https://storage.googleapis.com/gvisor/releases/release/$RELEASE/$ARCH
                 cd /tmp
                 wget -q $BASE/gvisor.tar.bz2 -O gvisor.tar.bz2
                 wget -q $BASE/gvisor.tar.bz2.sha512 -O gvisor.tar.bz2.sha512
                 sha512sum -c gvisor.tar.bz2.sha512
                 tar -xjf gvisor.tar.bz2 -C /host/usr/local/bin
                 rm -f gvisor.tar.bz2 gvisor.tar.bz2.sha512
+                echo "$RELEASE" > $STAMP
               }
               effective() {
                 chroot /host containerd config dump 2>/dev/null | grep -q 'runtimes.runsc'
