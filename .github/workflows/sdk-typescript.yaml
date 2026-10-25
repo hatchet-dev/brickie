@@ -17,6 +17,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: sdk-typescript-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -57,17 +61,20 @@ jobs:
           published=$(pnpm view @hatchet-dev/sandbox version 2>/dev/null || true)
           if [ "$version" = "$published" ]; then
             echo "@hatchet-dev/sandbox@${version} is already on npm; nothing to publish"
+          else
+            pnpm build
+            pnpm publish --no-git-checks
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Release when missing
+        run: |
+          if gh release view "ts/${VERSION}" >/dev/null 2>&1; then
+            echo "release ts/${VERSION} exists"
             exit 0
           fi
-          pnpm build
-          pnpm publish --no-git-checks
-          echo "VERSION_TAG=$version" >> "$GITHUB_ENV"
-      - name: Release
-        if: env.VERSION_TAG != ''
-        run: |
-          gh release create "ts/${VERSION_TAG}" \
+          gh release create "ts/${VERSION}" \
             --target "$GITHUB_SHA" \
-            --title "TypeScript SDK ${VERSION_TAG}" \
+            --title "TypeScript SDK ${VERSION}" \
             --generate-notes \
             --latest=false
         env:
