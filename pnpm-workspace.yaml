@@ -1,3 +1,7 @@
 packages:
   - sdks/typescript
   - examples/typescript
+allowBuilds:
+  '@hatchet-dev/typescript-sdk': true
+  esbuild: true
+  protobufjs: true
