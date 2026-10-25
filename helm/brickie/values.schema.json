@@ -154,6 +154,12 @@
         "release": {
           "type": "string",
           "minLength": 1
+        },
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },

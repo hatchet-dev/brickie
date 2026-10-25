@@ -141,7 +141,9 @@ kata-deploy:
 
 # gVisor installer: a privileged DaemonSet that downloads the pinned release to
 # every node, registers runsc with containerd, and creates the gvisor
-# RuntimeClass. Enable with sandbox.runtime: gvisor.
+# RuntimeClass. Enable with sandbox.runtime: gvisor. nodeSelector limits the
+# installer to sandbox nodes and makes the RuntimeClass schedule only there.
 gvisor:
   install: false
   release: "20261005.0"
+  nodeSelector: {}

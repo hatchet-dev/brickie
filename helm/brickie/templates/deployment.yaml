@@ -19,6 +19,10 @@ spec:
     metadata:
       labels:
         {{- include "brickie.selectorLabels" . | nindent 8 }}
+      {{- if .Values.hatchet.token }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "brickie.fullname" . }}
       {{- with .Values.imagePullSecrets }}
