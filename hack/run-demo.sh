@@ -27,9 +27,16 @@ spin_until() {
   frames='|/-\'
   i=0
   while [ $i -lt $((timeout * 4)) ]; do
-    if "$@" 2>/dev/null; then
+    # 2 means the thing we are waiting on died; stop instead of spinning out the timeout.
+    status=0
+    "$@" 2>/dev/null || status=$?
+    if [ "$status" -eq 0 ]; then
       printf '\r\033[K'
       return 0
+    fi
+    if [ "$status" -eq 2 ]; then
+      printf '\r\033[K'
+      return 2
     fi
     printf '\r  %s %s' "$(printf %s "$frames" | cut -c$((i % 4 + 1)))" "$msg"
     i=$((i + 1))
@@ -128,14 +135,29 @@ else
   set -a
   . ./.env
   set +a
+  # The Docker SDK reads DOCKER_HOST and otherwise dials /var/run/docker.sock.
+  # The CLI follows the active context, which on Docker Desktop is often
+  # ~/.docker/run/docker.sock with no default socket at all.
+  if [ -z "${DOCKER_HOST:-}" ]; then
+    docker_host=$(docker context inspect --format '{{.Endpoints.docker.Host}}' "$(docker context show)" 2>/dev/null || true)
+    if [ -n "${docker_host:-}" ]; then
+      export DOCKER_HOST="$docker_host"
+    fi
+  fi
   nohup ./bin/brickie worker > "$LOG_FILE" 2>&1 &
   echo $! > "$PID_FILE"
   provider_connected() {
-    provider_alive || { echo; echo "error: provider exited; see $LOG_FILE" >&2; tail -5 "$LOG_FILE" >&2; exit 1; }
+    provider_alive || return 2
     grep -q "connected as grpc operator" "$LOG_FILE" 2>/dev/null
   }
-  if ! spin_until "waiting for the provider to connect to hatchet" 30 provider_connected; then
-    echo "error: provider did not connect within 30s; see $LOG_FILE" >&2
+  connect_status=0
+  spin_until "waiting for the provider to connect to hatchet" 30 provider_connected || connect_status=$?
+  if [ "$connect_status" -ne 0 ]; then
+    if [ "$connect_status" -eq 2 ]; then
+      echo "error: provider exited; see $LOG_FILE" >&2
+    else
+      echo "error: provider did not connect within 30s; see $LOG_FILE" >&2
+    fi
     tail -5 "$LOG_FILE" >&2
     exit 1
   fi
