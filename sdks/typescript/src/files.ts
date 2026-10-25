@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import type { JsonObject } from '@hatchet-dev/typescript-sdk/v1';
 
-export type FileType = 'file' | 'dir' | 'symlink';
+export type FileType = 'file' | 'dir';
 
 export interface EntryInfo {
   name: string;
@@ -11,7 +11,6 @@ export interface EntryInfo {
   mode: number;
   permissions: string;
   modifiedTime?: Date;
-  symlinkTarget?: string;
 }
 
 export type FileData = string | ArrayBuffer | Uint8Array | Blob;
@@ -119,7 +118,7 @@ export class Files {
     return out;
   }
 
-  /** Reads a file as text (default), bytes, or a Blob. Files over the provider's `--max-file-bytes` (2 MiB) come through the provider's object store instead of Hatchet. */
+  /** Reads a file as text (default), bytes, or a Blob. Files over the provider's `--max-file-bytes` (2 MiB) come through the provider's `--store` instead of Hatchet. */
   read(path: string, opts?: ReadOpts & { format?: 'text' }): Promise<string>;
   read(path: string, opts: ReadOpts & { format: 'bytes' }): Promise<Uint8Array>;
   read(path: string, opts: ReadOpts & { format: 'blob' }): Promise<Blob>;
@@ -131,7 +130,7 @@ export class Files {
     return bytes.toString('utf8');
   }
 
-  /** Writes one file or several. Parent directories are created. Bytes are stored exactly. Files over 2 MiB go through the provider's object store instead of Hatchet. */
+  /** Writes one file or several. Parent directories are created. Bytes are stored exactly. Files over 2 MiB go through the provider's `--store` instead of Hatchet. */
   write(path: string, data: FileData): Promise<EntryInfo>;
   write(files: WriteEntry[]): Promise<EntryInfo[]>;
   async write(pathOrFiles: string | WriteEntry[], data?: FileData): Promise<EntryInfo | EntryInfo[]> {

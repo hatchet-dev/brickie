@@ -16,11 +16,3 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "brickie.sandboxNamespace" -}}
 {{- .Values.sandbox.namespace | default .Release.Namespace -}}
 {{- end -}}
-
-{{- define "brickie.credentialNames" -}}
-{{- if .Values.sandbox.credentialNames -}}
-{{- join "," .Values.sandbox.credentialNames -}}
-{{- else -}}
-{{- keys .Values.sandbox.credentials | sortAlpha | join "," -}}
-{{- end -}}
-{{- end -}}

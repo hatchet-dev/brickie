@@ -1,16 +1,14 @@
-// Package docker runs sandboxes as containers on a Docker engine, with each
-// workspace a directory on this host bind-mounted into its container.
+// Package docker runs sandboxes as containers on a Docker engine, each with
+// sandboxd as its entrypoint.
 package docker
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 
@@ -20,41 +18,41 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
-	"github.com/hatchet-dev/brickie/internal/driver/fsops"
+	"github.com/hatchet-dev/brickie/internal/driver"
 	"github.com/hatchet-dev/brickie/internal/engine"
+	"github.com/hatchet-dev/brickie/internal/sandboxd"
 )
 
 const (
-	workspacePath = "/workspace"
-	label         = "brickie.hatchet.run/sandbox"
+	label        = "brickie.hatchet.run/sandbox"
+	sandboxdPath = "/sandboxd"
 )
 
-type execResult struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
-}
+var (
+	grpcPort = network.MustParsePort(strconv.Itoa(sandboxd.GRPCPort) + "/tcp")
+	restPort = network.MustParsePort(strconv.Itoa(sandboxd.RESTPort) + "/tcp")
+)
 
 type liveSandbox struct {
 	mu       sync.Mutex
-	dir      string
 	ttl      time.Duration
 	lastUsed time.Time
-	daemon   *sandboxdClient
+	client   *sandboxd.Client
 }
 
 // Options configures the driver; zero values take the defaults.
 type Options struct {
 	IdleTTL      time.Duration
 	MaxFileBytes int64
-	Staging      fsops.Staging
+	Staging      driver.Staging
 }
 
-// Driver owns sandbox lifecycle, snapshots, and turn dispatch on one Docker engine.
+// Driver owns sandbox lifecycle and turn dispatch on one Docker engine.
 type Driver struct {
 	cli      *client.Client
 	opts     Options
 	sandboxd string
+	token    string
 
 	mu   sync.Mutex
 	live map[string]*liveSandbox
@@ -73,7 +71,11 @@ func New(opts Options) (*Driver, error) {
 	if opts.IdleTTL <= 0 {
 		opts.IdleTTL = 15 * time.Minute
 	}
-	d := &Driver{cli: cli, opts: opts, live: map[string]*liveSandbox{}}
+	token, err := sandboxd.NewToken()
+	if err != nil {
+		return nil, err
+	}
+	d := &Driver{cli: cli, opts: opts, token: token, live: map[string]*liveSandbox{}}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if d.sandboxd, err = d.ensureSandboxd(ctx); err != nil {
@@ -111,28 +113,26 @@ func (d *Driver) ensureImage(ctx context.Context, image string) error {
 	return nil
 }
 
-func (d *Driver) createContainer(ctx context.Context, name, image, workspace string) (*sandboxdClient, error) {
+func (d *Driver) createContainer(ctx context.Context, name, image string) (*sandboxd.Client, error) {
 	if err := d.ensureImage(ctx, image); err != nil {
 		return nil, err
 	}
 	d.removeContainer(ctx, name)
 	useInit := true
+	loopback := netip.MustParseAddr("127.0.0.1")
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: name,
 		Config: &container.Config{
 			Image:        image,
-			Entrypoint:   []string{sandboxdPath, "--root-dir", workspacePath, "--listen-host", "0.0.0.0"},
+			Entrypoint:   append([]string{sandboxdPath}, sandboxd.Args(d.token)...),
 			Cmd:          []string{},
-			WorkingDir:   workspacePath,
+			WorkingDir:   sandboxd.Workspace,
 			Labels:       map[string]string{label: "true"},
-			ExposedPorts: network.PortSet{network.MustParsePort(sandboxdGRPCPort): struct{}{}},
+			ExposedPorts: network.PortSet{grpcPort: struct{}{}, restPort: struct{}{}},
 		},
 		HostConfig: &container.HostConfig{
-			Mounts: []mount.Mount{
-				{Type: mount.TypeBind, Source: workspace, Target: workspacePath},
-				{Type: mount.TypeBind, Source: d.sandboxd, Target: sandboxdPath, ReadOnly: true},
-			},
-			PortBindings: network.PortMap{network.MustParsePort(sandboxdGRPCPort): {{HostIP: netip.MustParseAddr("127.0.0.1")}}},
+			Mounts:       []mount.Mount{{Type: mount.TypeBind, Source: d.sandboxd, Target: sandboxdPath, ReadOnly: true}},
+			PortBindings: network.PortMap{grpcPort: {{HostIP: loopback}}, restPort: {{HostIP: loopback}}},
 			Init:         &useInit,
 		},
 	})
@@ -142,12 +142,33 @@ func (d *Driver) createContainer(ctx context.Context, name, image, workspace str
 	if _, err := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		return nil, fmt.Errorf("start container %s: %w", name, err)
 	}
-	daemon, err := d.connectSandboxd(ctx, created.ID)
+	c, err := d.connect(ctx, created.ID)
 	if err != nil {
 		d.removeContainer(ctx, name)
 		return nil, fmt.Errorf("sandbox %s: %w", name, err)
 	}
-	return daemon, nil
+	return c, nil
+}
+
+func (d *Driver) connect(ctx context.Context, containerID string) (*sandboxd.Client, error) {
+	inspect, err := d.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	hostPort := func(p network.Port) string {
+		if inspect.Container.NetworkSettings == nil {
+			return ""
+		}
+		for _, b := range inspect.Container.NetworkSettings.Ports[p] {
+			return "127.0.0.1:" + b.HostPort
+		}
+		return ""
+	}
+	grpcAddr, restAddr := hostPort(grpcPort), hostPort(restPort)
+	if grpcAddr == "" || restAddr == "" {
+		return nil, errors.New("sandboxd ports were not published")
+	}
+	return sandboxd.Dial(ctx, grpcAddr, restAddr, d.token)
 }
 
 func (d *Driver) removeContainer(ctx context.Context, name string) {
@@ -163,20 +184,11 @@ func (d *Driver) acquire(ctx context.Context, name, image string, ttl time.Durat
 	if sb, ok := d.live[name]; ok {
 		return sb, false, nil
 	}
-	dir, err := os.MkdirTemp("", name+"-")
+	c, err := d.createContainer(ctx, name, image)
 	if err != nil {
 		return nil, false, err
 	}
-	workspace := filepath.Join(dir, "workspace")
-	if err := os.MkdirAll(workspace, 0o750); err != nil {
-		return nil, false, err
-	}
-	daemon, err := d.createContainer(ctx, name, image, workspace)
-	if err != nil {
-		_ = os.RemoveAll(dir)
-		return nil, false, err
-	}
-	sb := &liveSandbox{dir: dir, ttl: ttl, lastUsed: time.Now(), daemon: daemon}
+	sb := &liveSandbox{ttl: ttl, lastUsed: time.Now(), client: c}
 	d.live[name] = sb
 	return sb, true, nil
 }
@@ -194,8 +206,7 @@ func (d *Driver) destroy(name string) {
 	d.mu.Unlock()
 	d.removeContainer(context.Background(), name)
 	if ok {
-		sb.daemon.close()
-		_ = os.RemoveAll(sb.dir)
+		sb.client.Close()
 	}
 }
 
@@ -216,7 +227,7 @@ func (d *Driver) reap() {
 }
 
 // Live reports the running sandboxes and when each last ran a turn.
-func (d *Driver) Live() map[string]time.Time {
+func (d *Driver) Live(context.Context) map[string]time.Time {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	out := make(map[string]time.Time, len(d.live))
@@ -246,104 +257,26 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		req.Logf("sandbox %s destroyed", req.SandboxName)
 		return engine.TurnResponse{Output: json.RawMessage(`{"destroyed":true}`)}, nil
 	}
-
 	timings := map[string]int64{}
-	phase := func(name string, start time.Time) {
-		timings[name] = time.Since(start).Milliseconds()
-	}
-
-	claimStart := time.Now()
+	start := time.Now()
 	var sb *liveSandbox
-	var created bool
+	var fresh bool
 	var err error
 	if req.Fn == engine.CreateFn || req.Fn == engine.ConnectFn {
-		sb, created, err = d.acquire(ctx, req.SandboxName, req.Image, req.IdleTTL)
-		if err != nil {
+		if sb, fresh, err = d.acquire(ctx, req.SandboxName, req.Image, req.IdleTTL); err != nil {
 			return engine.TurnResponse{}, err
 		}
 	} else if sb = d.lookup(req.SandboxName); sb == nil {
-		return engine.TurnResponse{}, fmt.Errorf("sandbox %s is not running on this provider (idle-expired, killed, or started on another provider): connect to it first", strings.TrimPrefix(req.SandboxName, "brickie-"))
+		return engine.TurnResponse{}, fmt.Errorf("sandbox %s is not running on this provider (idle-expired, killed, or started on another provider): connect to it first", req.SandboxID)
 	}
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 	sb.lastUsed = time.Now()
-	phase("claim", claimStart)
-	workspace := filepath.Join(sb.dir, "workspace")
-	execIn := func(ctx context.Context, argv []string, timeout time.Duration) (execResult, error) {
-		return sb.daemon.run(ctx, argv, timeout)
-	}
-	if created {
+	driver.Phase(timings, "claim", start)
+	if fresh {
 		req.Logf("sandbox %s created", req.SandboxName)
 	} else {
 		req.Logf("sandbox %s reused", req.SandboxName)
 	}
-
-	// The snapshot tar is agent-influenced, so it is extracted inside the
-	// sandbox: a hostile entry can only unpack within the container. The tar is
-	// handed over through the workspace mount rather than stdin.
-	if created && req.SnapshotTar != nil {
-		restoreStart := time.Now()
-		const tarName = ".brickie-restore.tar.gz"
-		if err := os.WriteFile(filepath.Join(workspace, tarName), req.SnapshotTar, 0o600); err != nil {
-			return engine.TurnResponse{}, err
-		}
-		res, err := execIn(ctx, []string{"sh", "-c", "tar -xzf " + tarName + " -C . && rm -f " + tarName}, 0)
-		if err != nil {
-			return engine.TurnResponse{}, fmt.Errorf("restore snapshot: %w", err)
-		}
-		if res.ExitCode != 0 {
-			return engine.TurnResponse{}, fmt.Errorf("restore snapshot (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
-		}
-		phase("restore", restoreStart)
-		req.Logf("workspace restored from snapshot tar")
-	}
-
-	if req.Fn == engine.CreateFn || req.Fn == engine.ConnectFn {
-		out, _ := json.Marshal(map[string]bool{"created": created})
-		return engine.TurnResponse{Output: out, Timings: timings}, nil
-	}
-
-	execStart := time.Now()
-	var output any
-	mutated := true
-	switch {
-	case strings.HasPrefix(req.Fn, fsops.Prefix):
-		output, mutated, err = fsops.Turn(ctx, workspace, req.Fn, req.Input, fsops.Options{MaxBytes: d.opts.MaxFileBytes, Staging: d.opts.Staging, SandboxID: strings.TrimPrefix(req.SandboxName, "brickie-")})
-		if err != nil {
-			return engine.TurnResponse{}, err
-		}
-	case req.Fn == engine.CommandFn:
-		var in engine.CommandInput
-		if err := json.Unmarshal(req.Input, &in); err != nil {
-			return engine.TurnResponse{}, err
-		}
-		res, err := execIn(ctx, []string{"sh", "-c", in.Cmd}, time.Duration(in.TimeoutMs)*time.Millisecond)
-		if err != nil {
-			return engine.TurnResponse{}, err
-		}
-		output = engine.CommandOutput{Stdout: strings.TrimSpace(res.Stdout), Stderr: strings.TrimSpace(res.Stderr), ExitCode: res.ExitCode}
-	default:
-		return engine.TurnResponse{}, fmt.Errorf("unknown sandbox fn %q", req.Fn)
-	}
-
-	phase("exec", execStart)
-	req.Logf("fn %s executed in %s", req.Fn, time.Since(execStart).Round(time.Millisecond))
-	outJSON, err := json.Marshal(output)
-	if err != nil {
-		return engine.TurnResponse{}, err
-	}
-	if !mutated {
-		return engine.TurnResponse{Output: outJSON, Timings: timings}, nil
-	}
-	checkpointStart := time.Now()
-	outTar := filepath.Join(sb.dir, "out.tar.gz")
-	if out, err := exec.CommandContext(ctx, "tar", "-czf", outTar, "-C", workspace, ".").CombinedOutput(); err != nil { // #nosec G204 -- paths are provider-built
-		return engine.TurnResponse{}, fmt.Errorf("snapshot workspace: %s", out)
-	}
-	snapshot, err := os.ReadFile(outTar) // #nosec G304 -- outTar is the provider's own temp file
-	if err != nil {
-		return engine.TurnResponse{}, err
-	}
-	phase("checkpoint", checkpointStart)
-	return engine.TurnResponse{Output: outJSON, SnapshotTar: snapshot, Timings: timings}, nil
+	return driver.Run(ctx, sb.client, req, fresh, timings, driver.Options{MaxFileBytes: d.opts.MaxFileBytes, Staging: d.opts.Staging})
 }

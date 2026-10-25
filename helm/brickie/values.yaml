@@ -3,7 +3,7 @@
 # Minimum install:
 #   helm upgrade --install brickie ./helm/brickie -n brickie --create-namespace \
 #     --set hatchet.token=$HATCHET_CLIENT_TOKEN \
-#     --set objectStore=s3://my-bucket/brickie
+#     --set store=s3://my-bucket/brickie
 #
 # Everything the provider needs is bundled: the agent-sandbox controller, the
 # Kata Containers runtime (default), an optional gVisor installer, and a
@@ -58,7 +58,7 @@ sandbox:
   maxIdleTTL: 24h
 
   # Largest file files.read and files.write carry inside a Hatchet task.
-  # Larger files go through objectStore. Raising this above 3 MiB also needs
+  # Larger files go through store. Raising this above 3 MiB also needs
   # SERVER_GRPC_MAX_MSG_SIZE raised on the Hatchet engine (default 4 MiB).
   maxFileBytes: 2097152
 
@@ -71,36 +71,28 @@ sandbox:
   #   none:   plain containers. Development only; not isolated from the node.
   runtime: kata
 
-  # Environment variables copied into every sandbox pod, for example an API key
-  # the agent needs. Stored by the chart in a Secret. Nothing else from the
-  # provider or the node reaches a sandbox.
-  credentials: {}
-  # Or an existing Secret, plus the names of the keys to copy.
-  existingCredentialsSecret: ""
-  credentialNames: []
-
-  # Images to pre-start at provider start. Other images get a warm pool on
-  # first use. warmReplicas is how many ready pods each pool keeps.
-  warmImages: []
+  # Ready pods each warm pool keeps. Every image the SDK asks for gets its own
+  # pool on first use; the default image gets one at provider start.
   warmReplicas: 2
 
-# Bucket for snapshots and for files larger than sandbox.maxFileBytes.
-# The provider pod has no durable disk: without a bucket, snapshots are lost on
-# restart and connect() cannot resume a sandbox.
+# Bucket for snapshots, sandbox metadata, and files larger than
+# sandbox.maxFileBytes. Empty keeps everything on the pod's emptyDir, which is
+# lost on restart, and files over maxFileBytes then fail because your
+# application cannot reach the pod's disk. Development only.
 #   s3://bucket/prefix?region=us-east-1
 #   gs://bucket/prefix
 #   azblob://container/prefix
 #   s3://bucket/prefix?endpoint=https://host&use_path_style=true   (S3-compatible)
 # Credentials come from the pod identity (IRSA, workload identity) or from
-# objectStoreSecret, a Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
-# or the GCP and Azure equivalents.
-objectStore: ""
-objectStoreSecret: ""
+# storeSecret, a Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY or the
+# GCP and Azure equivalents.
+store: ""
+storeSecret: ""
 
-# NetworkPolicy for sandbox pods: no ingress, no egress except what is listed.
-# Only enforced by a CNI that implements NetworkPolicy (Cilium, Calico, or the
-# EKS VPC CNI with network policy enabled). The provider is not affected; it
-# reaches pods through the Kubernetes API.
+# NetworkPolicy for sandbox pods: no egress except what is listed, and no
+# ingress except the provider pod, which runs commands and moves files over the
+# sandbox daemon's ports 9090 and 8080. Only enforced by a CNI that implements
+# NetworkPolicy (Cilium, Calico, or the EKS VPC CNI with network policy enabled).
 networkPolicy:
   enabled: true
   # Let sandboxes resolve names through kube-dns.
@@ -119,7 +111,7 @@ tolerations: []
 agent-sandbox:
   enabled: true
   image:
-    tag: v1.0.7
+    tag: v1.0.8
   controller:
     extensions: true
 

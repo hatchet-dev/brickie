@@ -27,9 +27,16 @@ spin_until() {
   frames='|/-\'
   i=0
   while [ $i -lt $((timeout * 4)) ]; do
-    if "$@" 2>/dev/null; then
+    # 2 means the thing we are waiting on died; stop instead of spinning out the timeout.
+    status=0
+    "$@" 2>/dev/null || status=$?
+    if [ "$status" -eq 0 ]; then
       printf '\r\033[K'
       return 0
+    fi
+    if [ "$status" -eq 2 ]; then
+      printf '\r\033[K'
+      return 2
     fi
     printf '\r  %s %s' "$(printf %s "$frames" | cut -c$((i % 4 + 1)))" "$msg"
     i=$((i + 1))
@@ -79,7 +86,6 @@ fi
 
 if [ -f .env ] && grep -q HATCHET_CLIENT_TOKEN .env; then
   ok "hatchet token is in .env"
-  grep -q BRICKIE_OBJECT_STORE .env || echo "BRICKIE_OBJECT_STORE=file://$STATE_DIR/staging" >> .env
 else
   confirm "your programs and the sandbox provider authenticate to Hatchet with a token; we mint one and store it only in .env (mode 0600, git-ignored)" \
     "docker compose exec hatchet ./hatchet-admin token create ... >> .env"
@@ -88,7 +94,6 @@ else
   {
     echo "HATCHET_CLIENT_TOKEN=$TOKEN"
     echo "HATCHET_CLIENT_TLS_STRATEGY=none"
-    echo "BRICKIE_OBJECT_STORE=file://$STATE_DIR/staging"
   } >> .env
   umask 022
 fi
@@ -98,12 +103,12 @@ if [ -x bin/brickie ] && [ -z "$(find cmd internal go.mod go.sum -newer bin/bric
   ok "sandbox provider binary is up to date"
 else
   confirm "the sandbox provider is a Go program, but you don't need Go — we compile it inside a golang container" \
-    "docker run --rm -v \$PWD:/src golang:1.27 go build -o bin/brickie ./cmd/brickie"
+    "docker run --rm -v \$PWD:/src golang:1.27.3 go build -o bin/brickie ./cmd/brickie"
   docker run --rm -v "$PWD:/src" -w /src \
     -v brickie_go_cache:/go/pkg/mod -v brickie_go_build:/root/.cache/go-build \
     -e CGO_ENABLED=0 -e GOOS="$(uname -s | tr '[:upper:]' '[:lower:]')" \
     -e GOARCH="$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')" \
-    golang:1.27 go build -o bin/brickie ./cmd/brickie
+    golang:1.27.3 go build -o bin/brickie ./cmd/brickie
   REBUILT=1
 fi
 
@@ -130,14 +135,29 @@ else
   set -a
   . ./.env
   set +a
+  # The Docker SDK reads DOCKER_HOST and otherwise dials /var/run/docker.sock.
+  # The CLI follows the active context, which on Docker Desktop is often
+  # ~/.docker/run/docker.sock with no default socket at all.
+  if [ -z "${DOCKER_HOST:-}" ]; then
+    docker_host=$(docker context inspect --format '{{.Endpoints.docker.Host}}' "$(docker context show)" 2>/dev/null || true)
+    if [ -n "${docker_host:-}" ]; then
+      export DOCKER_HOST="$docker_host"
+    fi
+  fi
   nohup ./bin/brickie worker > "$LOG_FILE" 2>&1 &
   echo $! > "$PID_FILE"
   provider_connected() {
-    provider_alive || { echo; echo "error: provider exited; see $LOG_FILE" >&2; tail -5 "$LOG_FILE" >&2; exit 1; }
+    provider_alive || return 2
     grep -q "connected as grpc operator" "$LOG_FILE" 2>/dev/null
   }
-  if ! spin_until "waiting for the provider to connect to hatchet" 30 provider_connected; then
-    echo "error: provider did not connect within 30s; see $LOG_FILE" >&2
+  connect_status=0
+  spin_until "waiting for the provider to connect to hatchet" 30 provider_connected || connect_status=$?
+  if [ "$connect_status" -ne 0 ]; then
+    if [ "$connect_status" -eq 2 ]; then
+      echo "error: provider exited; see $LOG_FILE" >&2
+    else
+      echo "error: provider did not connect within 30s; see $LOG_FILE" >&2
+    fi
     tail -5 "$LOG_FILE" >&2
     exit 1
   fi
@@ -158,7 +178,7 @@ cat <<EOF
     dashboard   ${EXTERNAL_HATCHET:+your hatchet instance}${EXTERNAL_HATCHET:-http://localhost:8888  (admin@example.com / Admin123!!)}
     provider    tail -f $LOG_FILE   (stop: kill \$(cat $PID_FILE))
     token       .env (HATCHET_CLIENT_TOKEN, mode 0600)
-    staging     $STATE_DIR/staging (files over 2 MiB bypass Hatchet through it)
+    store       $STATE_DIR/store (snapshots; files over 2 MiB bypass Hatchet through it)
     sandboxes   Docker containers (alpine:3) on the local engine
                 no host env vars are injected
 

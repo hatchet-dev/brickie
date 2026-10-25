@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.27 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.3 AS build
 ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -7,8 +7,7 @@ COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /brickie ./cmd/brickie
 
-FROM alpine:3.22
-RUN apk add --no-cache tar
+FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /brickie /brickie
 ENTRYPOINT ["/brickie"]
 CMD ["worker"]

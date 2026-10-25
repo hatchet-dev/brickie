@@ -1,0 +1,497 @@
+// Package kubernetes runs sandboxes as agent-sandbox claims: one warm pool per
+// image, one claim and pod per sandbox, sandboxd reached over the pod IP.
+package kubernetes
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	sandboxv1beta1 "sigs.k8s.io/agent-sandbox/api/v1beta1"
+	extensionsv1beta1 "sigs.k8s.io/agent-sandbox/extensions/api/v1beta1"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/hatchet-dev/brickie/internal/driver"
+	"github.com/hatchet-dev/brickie/internal/engine"
+	"github.com/hatchet-dev/brickie/internal/sandboxd"
+)
+
+const (
+	sandboxLabel       = "brickie.hatchet.run/sandbox"
+	lastUsedAnnotation = "brickie.hatchet.run/last-used"
+	userLabelPrefix    = "sandbox.users.io/"
+	markerFile         = ".brickie-sandbox"
+	tokenSecret        = "brickie-sandboxd"
+	gvisorRuntimeClass = "gvisor"
+	kataRuntimeClass   = "kata-clh"
+)
+
+var runtimeClasses = map[string]string{"gvisor": gvisorRuntimeClass, "kata": kataRuntimeClass}
+
+// Options configures the driver; zero values take the defaults.
+type Options struct {
+	Namespace    string
+	Image        string
+	Runtime      string
+	WarmReplicas int
+	IdleTTL      time.Duration
+	ReadyTimeout time.Duration
+	MaxFileBytes int64
+	Staging      driver.Staging
+}
+
+// Driver binds sandboxes to warm pods and runs turns against their sandboxd.
+type Driver struct {
+	opts         Options
+	client       ctrlclient.Client
+	clientset    *kubernetes.Clientset
+	runtimeClass string
+	token        string
+
+	poolMu sync.Mutex
+	pools  map[string]string
+
+	sandboxMu sync.Mutex
+	sandboxes map[string]*sync.Mutex
+}
+
+// New connects to the cluster, selects the runtime class, and warms the pool
+// for the default image.
+func New(opts Options) (*Driver, error) {
+	if opts.Namespace == "" {
+		opts.Namespace = "default"
+	}
+	if opts.Image == "" {
+		opts.Image = "alpine:3"
+	}
+	if opts.ReadyTimeout <= 0 {
+		opts.ReadyTimeout = 5 * time.Minute
+	}
+	if opts.IdleTTL <= 0 {
+		opts.IdleTTL = 30 * time.Minute
+	}
+	if opts.WarmReplicas <= 0 {
+		opts.WarmReplicas = 2
+	}
+	restCfg, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	sch := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{scheme.AddToScheme, sandboxv1beta1.AddToScheme, extensionsv1beta1.AddToScheme} {
+		if err := add(sch); err != nil {
+			return nil, err
+		}
+	}
+	c, err := ctrlclient.New(restCfg, ctrlclient.Options{Scheme: sch})
+	if err != nil {
+		return nil, err
+	}
+	cs, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		return nil, err
+	}
+	d := &Driver{opts: opts, client: c, clientset: cs, pools: map[string]string{}, sandboxes: map[string]*sync.Mutex{}}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := d.detectRuntime(ctx); err != nil {
+		return nil, err
+	}
+	if err := d.ensureToken(ctx); err != nil {
+		return nil, err
+	}
+	if _, err := d.ensurePool(ctx, opts.Image); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+func loadConfig() (*rest.Config, error) {
+	if cfg, err := rest.InClusterConfig(); err == nil {
+		return cfg, nil
+	}
+	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{}).ClientConfig()
+}
+
+func (d *Driver) detectRuntime(ctx context.Context) error {
+	has := func(name string) bool {
+		_, err := d.clientset.NodeV1().RuntimeClasses().Get(ctx, name, metav1.GetOptions{})
+		return err == nil
+	}
+	switch mode := d.opts.Runtime; mode {
+	case "none":
+		return nil
+	case "", "auto":
+		for _, rc := range []string{kataRuntimeClass, gvisorRuntimeClass} {
+			if has(rc) {
+				d.runtimeClass = rc
+				break
+			}
+		}
+		if d.runtimeClass == "" {
+			fmt.Fprintf(os.Stderr, "brickie: no %s or %s runtime class; sandboxes run with the default runtime\n", kataRuntimeClass, gvisorRuntimeClass)
+			return nil
+		}
+	default:
+		rc, ok := runtimeClasses[mode]
+		if !ok {
+			return fmt.Errorf("unknown runtime %q (auto|gvisor|kata|none)", mode)
+		}
+		if !has(rc) {
+			return fmt.Errorf("runtime %s requested but the %q runtime class is not on this cluster", mode, rc)
+		}
+		d.runtimeClass = rc
+	}
+	fmt.Fprintf(os.Stderr, "brickie: sandboxes run under runtime class %s\n", d.runtimeClass)
+	return nil
+}
+
+// ensureToken reads the sandboxd bearer token shared by every sandbox in the
+// namespace, creating it on first run. Pods only ever see its digest.
+func (d *Driver) ensureToken(ctx context.Context) error {
+	secrets := d.clientset.CoreV1().Secrets(d.opts.Namespace)
+	s, err := secrets.Get(ctx, tokenSecret, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		token, tokenErr := sandboxd.NewToken()
+		if tokenErr != nil {
+			return tokenErr
+		}
+		s, err = secrets.Create(ctx, &corev1.Secret{
+			Name: tokenSecret, Namespace: d.opts.Namespace,
+			StringData: map[string]string{"token": token},
+		}, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			s, err = secrets.Get(ctx, tokenSecret, metav1.GetOptions{})
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("sandboxd token secret %s/%s: %w", d.opts.Namespace, tokenSecret, err)
+	}
+	d.token = string(s.Data["token"])
+	if d.token == "" {
+		return fmt.Errorf("sandboxd token secret %s/%s has no token key", d.opts.Namespace, tokenSecret)
+	}
+	return nil
+}
+
+func (d *Driver) podSpec(image string) corev1.PodSpec {
+	no := false
+	spec := corev1.PodSpec{
+		AutomountServiceAccountToken: &no,
+		SecurityContext:              &corev1.PodSecurityContext{SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
+		InitContainers: []corev1.Container{{
+			Name:         "sandboxd",
+			Image:        sandboxd.Image,
+			Command:      []string{"/bin/sh", "-c", "cp " + sandboxd.ImageBinary + " /brickie/sandboxd"},
+			VolumeMounts: []corev1.VolumeMount{{Name: "brickie", MountPath: "/brickie"}},
+		}},
+		Containers: []corev1.Container{{
+			Name:       "sandbox",
+			Image:      image,
+			Command:    append([]string{"/brickie/sandboxd"}, sandboxd.Args(d.token)...),
+			WorkingDir: sandboxd.Workspace,
+			Ports: []corev1.ContainerPort{
+				{Name: "rest", ContainerPort: sandboxd.RESTPort},
+				{Name: "grpc", ContainerPort: sandboxd.GRPCPort},
+			},
+			ReadinessProbe: &corev1.Probe{
+				HTTPGet:       &corev1.HTTPGetAction{Path: "/v1/health", Port: intstr.FromInt32(sandboxd.RESTPort)},
+				PeriodSeconds: 2,
+			},
+			SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: &no},
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: "brickie", MountPath: "/brickie", ReadOnly: true},
+				{Name: "workspace", MountPath: sandboxd.Workspace},
+			},
+		}},
+		Volumes: []corev1.Volume{
+			{Name: "brickie", EmptyDir: &corev1.EmptyDirVolumeSource{}},
+			{Name: "workspace", EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		},
+	}
+	if d.runtimeClass != "" {
+		rc := d.runtimeClass
+		spec.RuntimeClassName = &rc
+	}
+	return spec
+}
+
+func poolName(image string) string {
+	return "brickie-warm-" + fmt.Sprintf("%x", sha256.Sum256([]byte(image)))[:16]
+}
+
+// ensurePool upserts the SandboxTemplate and SandboxWarmPool for an image the
+// first time it is seen.
+func (d *Driver) ensurePool(ctx context.Context, image string) (string, error) {
+	d.poolMu.Lock()
+	defer d.poolMu.Unlock()
+	if name, ok := d.pools[image]; ok {
+		return name, nil
+	}
+	name := poolName(image)
+	tmpl := &extensionsv1beta1.SandboxTemplate{
+		Name: name, Namespace: d.opts.Namespace,
+		Spec: extensionsv1beta1.SandboxTemplateSpec{
+			SandboxBlueprint:        sandboxv1beta1.SandboxBlueprint{PodTemplate: sandboxv1beta1.PodTemplate{Spec: d.podSpec(image)}},
+			NetworkPolicyManagement: extensionsv1beta1.NetworkPolicyManagementUnmanaged,
+		},
+	}
+	replicas := int32(min(d.opts.WarmReplicas, 1000)) // #nosec G115 -- bounded above
+	pool := &extensionsv1beta1.SandboxWarmPool{
+		Name: name, Namespace: d.opts.Namespace,
+		Spec: extensionsv1beta1.SandboxWarmPoolSpec{
+			Replicas:       &replicas,
+			TemplateRef:    extensionsv1beta1.SandboxTemplateRef{Name: name},
+			UpdateStrategy: &extensionsv1beta1.SandboxWarmPoolUpdateStrategy{Type: extensionsv1beta1.RecreateSandboxWarmPoolUpdateStrategyType},
+		},
+	}
+	if err := d.upsert(ctx, tmpl, func(existing ctrlclient.Object) {
+		existing.(*extensionsv1beta1.SandboxTemplate).Spec = tmpl.Spec
+	}); err != nil {
+		return "", fmt.Errorf("sandbox template for %s: %w", image, err)
+	}
+	if err := d.upsert(ctx, pool, func(existing ctrlclient.Object) {
+		existing.(*extensionsv1beta1.SandboxWarmPool).Spec = pool.Spec
+	}); err != nil {
+		return "", fmt.Errorf("warm pool for %s: %w", image, err)
+	}
+	d.pools[image] = name
+	fmt.Fprintf(os.Stderr, "brickie: warm pool %s serves image %s (%d replicas)\n", name, image, replicas)
+	return name, nil
+}
+
+func (d *Driver) upsert(ctx context.Context, obj ctrlclient.Object, update func(existing ctrlclient.Object)) error {
+	err := d.client.Create(ctx, obj)
+	if !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	existing := obj.DeepCopyObject().(ctrlclient.Object)
+	if err := d.client.Get(ctx, ctrlclient.ObjectKeyFromObject(obj), existing); err != nil {
+		return err
+	}
+	update(existing)
+	return d.client.Update(ctx, existing)
+}
+
+func userLabels(metadata map[string]string) map[string]string {
+	labels := map[string]string{}
+	for k, v := range metadata {
+		if len(validation.IsQualifiedName(userLabelPrefix+k)) == 0 && len(validation.IsValidLabelValue(v)) == 0 {
+			labels[userLabelPrefix+k] = v
+		}
+	}
+	return labels
+}
+
+func ready(c *extensionsv1beta1.SandboxClaim) bool {
+	return c.DeletionTimestamp == nil && c.Status.SandboxStatus.Name != "" && len(c.Status.SandboxStatus.PodIPs) > 0 && meta.IsStatusConditionTrue(c.Status.Conditions, "Ready")
+}
+
+func (d *Driver) getClaim(ctx context.Context, name string) (*extensionsv1beta1.SandboxClaim, error) {
+	var claim extensionsv1beta1.SandboxClaim
+	if err := d.client.Get(ctx, ctrlclient.ObjectKey{Namespace: d.opts.Namespace, Name: name}, &claim); err != nil {
+		return nil, err
+	}
+	return &claim, nil
+}
+
+// ensureClaim binds a warm pod to the sandbox, or finds the pod it already
+// has, and waits until it is ready.
+func (d *Driver) ensureClaim(ctx context.Context, pool string, req engine.TurnRequest, ttl time.Duration) (*extensionsv1beta1.SandboxClaim, error) {
+	newClaim := func() *extensionsv1beta1.SandboxClaim {
+		return &extensionsv1beta1.SandboxClaim{
+			Name: req.SandboxName, Namespace: d.opts.Namespace, Labels: map[string]string{sandboxLabel: req.SandboxID},
+			Spec: extensionsv1beta1.SandboxClaimSpec{
+				WarmPoolRef:           extensionsv1beta1.SandboxWarmPoolRef{Name: pool},
+				Lifecycle:             &extensionsv1beta1.Lifecycle{ShutdownTime: shutdownTime(ttl), ShutdownPolicy: extensionsv1beta1.ShutdownPolicyDelete},
+				AdditionalPodMetadata: sandboxv1beta1.PodMetadata{Labels: userLabels(req.Metadata)},
+			},
+		}
+	}
+	existing, err := d.getClaim(ctx, req.SandboxName)
+	switch {
+	case err == nil && existing.DeletionTimestamp == nil:
+	case err == nil:
+		if err := d.waitGone(ctx, req.SandboxName); err != nil {
+			return nil, err
+		}
+		fallthrough
+	case apierrors.IsNotFound(err):
+		if err := d.client.Create(ctx, newClaim()); err != nil {
+			return nil, fmt.Errorf("create sandbox claim %s: %w", req.SandboxName, err)
+		}
+	default:
+		return nil, err
+	}
+	deadline := time.Now().Add(d.opts.ReadyTimeout)
+	var last *extensionsv1beta1.SandboxClaim
+	for time.Now().Before(deadline) {
+		if claim, err := d.getClaim(ctx, req.SandboxName); err == nil {
+			last = claim
+			if ready(claim) {
+				return claim, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	detail := "the claim never came back from the api server"
+	if last != nil {
+		if c := meta.FindStatusCondition(last.Status.Conditions, "Ready"); c != nil {
+			detail = c.Reason + ": " + c.Message
+		}
+	}
+	return nil, fmt.Errorf("sandbox claim %s not ready within %s (%s)", req.SandboxName, d.opts.ReadyTimeout, detail)
+}
+
+func (d *Driver) waitGone(ctx context.Context, name string) error {
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		if _, err := d.getClaim(ctx, name); apierrors.IsNotFound(err) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("previous sandbox claim %s is still terminating", name)
+}
+
+func shutdownTime(ttl time.Duration) *metav1.Time {
+	t := metav1.NewTime(time.Now().Add(ttl))
+	return &t
+}
+
+func (d *Driver) touch(ctx context.Context, name string, ttl time.Duration) error {
+	body, _ := json.Marshal(map[string]any{
+		"metadata": map[string]any{"annotations": map[string]string{lastUsedAnnotation: time.Now().UTC().Format(time.RFC3339)}},
+		"spec":     map[string]any{"lifecycle": map[string]any{"shutdownTime": shutdownTime(ttl)}},
+	})
+	claim := &extensionsv1beta1.SandboxClaim{Name: name, Namespace: d.opts.Namespace}
+	return d.client.Patch(ctx, claim, ctrlclient.RawPatch(types.MergePatchType, body))
+}
+
+func (d *Driver) dial(ctx context.Context, claim *extensionsv1beta1.SandboxClaim) (*sandboxd.Client, error) {
+	ip := claim.Status.SandboxStatus.PodIPs[0]
+	return sandboxd.Dial(ctx, net.JoinHostPort(ip, strconv.Itoa(sandboxd.GRPCPort)), net.JoinHostPort(ip, strconv.Itoa(sandboxd.RESTPort)), d.token)
+}
+
+func (d *Driver) lock(name string) *sync.Mutex {
+	d.sandboxMu.Lock()
+	defer d.sandboxMu.Unlock()
+	mu, ok := d.sandboxes[name]
+	if !ok {
+		mu = &sync.Mutex{}
+		d.sandboxes[name] = mu
+	}
+	return mu
+}
+
+// Live reports the ready claims and when each last ran a turn.
+func (d *Driver) Live(ctx context.Context) map[string]time.Time {
+	var claims extensionsv1beta1.SandboxClaimList
+	if err := d.client.List(ctx, &claims, ctrlclient.InNamespace(d.opts.Namespace), ctrlclient.HasLabels{sandboxLabel}); err != nil {
+		return nil
+	}
+	out := map[string]time.Time{}
+	for i := range claims.Items {
+		c := &claims.Items[i]
+		if !ready(c) {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, c.Annotations[lastUsedAnnotation])
+		if err != nil {
+			t = c.CreationTimestamp.Time
+		}
+		out[c.Name] = t
+	}
+	return out
+}
+
+// RunTurn runs one turn; turns on the same sandbox are serialized.
+func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.TurnResponse, error) {
+	mu := d.lock(req.SandboxName)
+	mu.Lock()
+	defer mu.Unlock()
+	if req.Fn == engine.DestroyFn {
+		claim := &extensionsv1beta1.SandboxClaim{Name: req.SandboxName, Namespace: d.opts.Namespace}
+		if err := d.client.Delete(ctx, claim); err != nil && !apierrors.IsNotFound(err) {
+			return engine.TurnResponse{}, fmt.Errorf("delete sandbox claim %s: %w", req.SandboxName, err)
+		}
+		req.Logf("sandbox %s destroyed", req.SandboxName)
+		return engine.TurnResponse{Output: json.RawMessage(`{"destroyed":true}`)}, nil
+	}
+	ttl := req.IdleTTL
+	if ttl <= 0 {
+		ttl = d.opts.IdleTTL
+	}
+	timings := map[string]int64{}
+	start := time.Now()
+	var claim *extensionsv1beta1.SandboxClaim
+	var err error
+	starting := req.Fn == engine.CreateFn || req.Fn == engine.ConnectFn
+	if starting {
+		pool, err := d.ensurePool(ctx, req.Image)
+		if err != nil {
+			return engine.TurnResponse{}, err
+		}
+		if claim, err = d.ensureClaim(ctx, pool, req, ttl); err != nil {
+			return engine.TurnResponse{}, err
+		}
+	} else if claim, err = d.getClaim(ctx, req.SandboxName); err != nil || !ready(claim) {
+		return engine.TurnResponse{}, fmt.Errorf("sandbox %s is not running (idle-expired or killed): connect to it first", req.SandboxID)
+	}
+	c, err := d.dial(ctx, claim)
+	if err != nil {
+		return engine.TurnResponse{}, fmt.Errorf("sandbox %s: %w", req.SandboxName, err)
+	}
+	defer c.Close()
+	_, err = c.Stat(ctx, markerFile)
+	fresh := sandboxd.IsNotFound(err)
+	switch {
+	case err != nil && !fresh:
+		return engine.TurnResponse{}, fmt.Errorf("sandbox %s: %w", req.SandboxName, err)
+	case fresh && !starting:
+		return engine.TurnResponse{}, fmt.Errorf("sandbox %s was replaced (its pod restarted) and its live workspace is lost: connect to it again to restore the latest snapshot", req.SandboxID)
+	case fresh:
+		if err := c.Write(ctx, markerFile, strings.NewReader(req.SandboxID), int64(len(req.SandboxID))); err != nil {
+			return engine.TurnResponse{}, fmt.Errorf("sandbox %s: %w", req.SandboxName, err)
+		}
+		req.Logf("sandbox %s bound to pod %s from pool %s", req.SandboxName, claim.Status.SandboxStatus.Name, claim.Spec.WarmPoolRef.Name)
+	default:
+		req.Logf("sandbox %s reused (pod %s)", req.SandboxName, claim.Status.SandboxStatus.Name)
+	}
+	driver.Phase(timings, "claim", start)
+	resp, err := driver.Run(ctx, c, req, fresh, timings, driver.Options{MaxFileBytes: d.opts.MaxFileBytes, Staging: d.opts.Staging})
+	if err != nil {
+		return engine.TurnResponse{}, err
+	}
+	if err := d.touch(ctx, req.SandboxName, ttl); err != nil {
+		req.Logf("extend sandbox %s deadline failed: %v", req.SandboxName, err)
+	}
+	return resp, nil
+}

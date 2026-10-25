@@ -6,18 +6,19 @@ metadata:
   labels:
     {{- include "brickie.labels" . | nindent 4 }}
 rules:
-  - apiGroups: ["agents.x-k8s.io"]
-    resources: ["sandboxes"]
-    verbs: ["get", "list", "watch"]
   - apiGroups: ["extensions.agents.x-k8s.io"]
-    resources: ["sandboxclaims", "sandboxtemplates", "sandboxwarmpools"]
-    verbs: ["create", "delete", "get", "list", "watch", "update", "patch"]
+    resources: ["sandboxclaims"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxtemplates", "sandboxwarmpools"]
+    verbs: ["get", "create", "update"]
   - apiGroups: [""]
-    resources: ["pods", "events"]
-    verbs: ["get", "list", "watch"]
+    resources: ["secrets"]
+    verbs: ["create"]
   - apiGroups: [""]
-    resources: ["pods/exec"]
-    verbs: ["create", "get"]
+    resources: ["secrets"]
+    resourceNames: ["brickie-sandboxd"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -5,12 +5,13 @@ brickie runs agent sandboxes as Hatchet durable tasks. The README covers how to 
 ## Layout
 
 - `cmd/brickie/`: cobra CLI, `worker` only (the sandbox provider)
-- `internal/engine/`: turn contract, provider (a Hatchet gRPC operator, no worker mode), snapshot store
-- `internal/driver/docker/`: sandbox lifecycle, snapshots, and turn dispatch on the local Docker engine; `sandboxd.go` injects the agent-sandbox runtime daemon into each container and runs commands through its gRPC ProcessService
-- `internal/driver/fsops/`: the `$fs.*` file functions on the workspace mount through `os.Root`
+- `internal/engine/`: turn contract, provider (a Hatchet gRPC operator, no worker mode), the store (snapshots, metadata, staged files in one gocloud bucket)
+- `internal/sandboxd/`: client for the agent-sandbox runtime daemon that is PID 1 in every sandbox; commands over gRPC, files over REST, bearer token on both
+- `internal/driver/`: the turn body both drivers share (restore, `$fs.*`, `$command`, checkpoint); `docker/` runs sandboxes as containers on the local engine, `kubernetes/` as agent-sandbox claims bound from per-image warm pools
 - `sdks/typescript`: the client SDK; `examples/typescript`: the demo session
 - `docker-compose.yml`: Hatchet lite v0.110.5 + Postgres with gRPC operators enabled; the provider runs on the host and talks to the local Docker engine
-- `hack/run-demo.sh`: first-run setup + the demo session; also the end-to-end check
+- `hack/run-demo.sh`: first-run setup + the demo session on Docker; `hack/e2e-kind.sh`: the same demos against the Kubernetes driver on a kind cluster
+- `docs/SECURITY.md`: trust boundaries and controls; update it when a boundary moves
 - `helm/brickie/`: the Kubernetes chart; subcharts (agent-sandbox, kata-deploy) are vendored under `charts/` so the chart installs with no external repositories; `values.schema.json` stays in sync with `values.yaml` and keeps `additionalProperties: false`
 - `Dockerfile`: the provider image the chart deploys
 
@@ -41,4 +42,5 @@ Build binaries to /tmp or use `go install`, do not commit binaries.
 ## Environment notes
 
 - When targeting Hatchet Cloud from a dev machine that has local hatchet mkcert setup, `unset HATCHET_CLIENT_TLS_ROOT_CA_FILE` first.
-- Commands run through `sandboxd` with `/workspace` as the working directory. Docker's init is PID 1 so orphans are reaped. The sandboxd image is pinned by digest in `internal/driver/docker/sandboxd.go`; upstream has no release tag yet.
+- Commands run through `sandboxd` with `/workspace` as the working directory. On Docker, Docker's init is PID 1 so orphans are reaped. The sandboxd image is pinned by digest in `internal/sandboxd/sandboxd.go`; upstream has no release tag yet.
+- The provider never touches sandbox files itself: every file function goes through the sandboxd REST API, and snapshots are `tar` runs inside the sandbox. Keep it that way; it is what makes the two drivers one code path.

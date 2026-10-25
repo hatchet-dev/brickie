@@ -1,3 +1,4 @@
+// Package engine defines the sandbox turn contract and the provider that runs it.
 package engine
 
 import (
@@ -7,6 +8,7 @@ import (
 	"time"
 )
 
+// TaskName is the Hatchet task every SDK call runs.
 const TaskName = "brickie-sandbox"
 
 // Turn functions the SDK can request. Create, Connect, and Destroy manage the
@@ -21,6 +23,7 @@ const (
 	DestroyFn = "$destroy"
 )
 
+// TurnInput is the task input the SDK sends.
 type TurnInput struct {
 	SandboxID  string            `json:"sandboxId,omitempty"`
 	Image      string            `json:"image,omitempty"`
@@ -31,6 +34,7 @@ type TurnInput struct {
 	IdleTTLMs  int64             `json:"idleTtlMs,omitempty"`
 }
 
+// TurnResult is the task output the SDK reads.
 type TurnResult struct {
 	Output     json.RawMessage  `json:"output"`
 	SandboxID  string           `json:"sandboxId"`
@@ -38,7 +42,9 @@ type TurnResult struct {
 	Timings    map[string]int64 `json:"timings,omitempty"`
 }
 
+// TurnRequest is one turn as the driver sees it.
 type TurnRequest struct {
+	SandboxID    string
 	SandboxName  string
 	Image        string
 	Fn           string
@@ -47,36 +53,29 @@ type TurnRequest struct {
 	SnapshotID   string
 	CheckpointID string
 	IdleTTL      time.Duration
+	Metadata     map[string]string
 	Log          func(message string)
 }
 
+// Logf writes to the turn log when there is one.
 func (r TurnRequest) Logf(format string, args ...any) {
 	if r.Log != nil {
 		r.Log(fmt.Sprintf(format, args...))
 	}
 }
 
+// TurnResponse is what a driver returns from a turn.
 type TurnResponse struct {
 	Output      json.RawMessage
 	SnapshotTar []byte
 	Timings     map[string]int64
 }
 
+// Driver runs turns and reports the sandboxes it has running with the time
+// each last ran a turn.
 type Driver interface {
 	RunTurn(ctx context.Context, req TurnRequest) (TurnResponse, error)
-}
-
-// SnapshotNativeDriver marks drivers that restore and checkpoint snapshots
-// themselves (overlayfs chains through the CSI node). The provider then passes
-// snapshot ids instead of tar bytes and skips its own store entirely.
-type SnapshotNativeDriver interface {
-	SnapshotNative() bool
-}
-
-// LiveLister reports the sandboxes a driver currently has running and when
-// each last ran a turn.
-type LiveLister interface {
-	Live() map[string]time.Time
+	Live(ctx context.Context) map[string]time.Time
 }
 
 // SandboxMeta is what a sandbox was created with, kept for connect and list.
@@ -103,11 +102,13 @@ type SandboxInfo struct {
 	LastUsed       *time.Time        `json:"lastUsed,omitempty"`
 }
 
+// CommandInput is the input of a $command turn.
 type CommandInput struct {
 	Cmd       string `json:"cmd"`
 	TimeoutMs int64  `json:"timeoutMs,omitempty"`
 }
 
+// CommandOutput is the output of a $command turn.
 type CommandOutput struct {
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`

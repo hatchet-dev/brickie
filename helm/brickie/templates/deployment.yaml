@@ -31,10 +31,19 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: provider
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: BRICKIE_DRIVER
               value: kubernetes
@@ -47,27 +56,17 @@ spec:
             - name: BRICKIE_MAX_SANDBOX_IDLE_TTL
               value: {{ .Values.sandbox.maxIdleTTL | quote }}
             - name: BRICKIE_MAX_FILE_BYTES
-              value: {{ .Values.sandbox.maxFileBytes | quote }}
-            - name: BRICKIE_RUNTIME
+              value: {{ .Values.sandbox.maxFileBytes | int64 | quote }}
+            - name: BRICKIE_SANDBOX_RUNTIME
               value: {{ .Values.sandbox.runtime | quote }}
-            {{- if .Values.sandbox.warmImages }}
-            - name: BRICKIE_WARM_IMAGES
-              value: {{ join "," .Values.sandbox.warmImages | quote }}
-            {{- end }}
             - name: BRICKIE_WARM_REPLICAS
               value: {{ .Values.sandbox.warmReplicas | quote }}
-            - name: BRICKIE_CREDENTIALS
-              value: {{ include "brickie.credentialNames" . | quote }}
-            {{- if .Values.objectStore }}
-            - name: BRICKIE_OBJECT_STORE
-              value: {{ .Values.objectStore | quote }}
-            {{- end }}
-            - name: BRICKIE_SNAPSHOT_DIR
-              value: /var/lib/brickie/snapshots
+            - name: BRICKIE_STORE
+              value: {{ .Values.store | default "file:///var/lib/brickie" | quote }}
             - name: BRICKIE_SLOTS
               value: {{ .Values.slots | quote }}
           envFrom:
-            {{- if or .Values.hatchet.token .Values.sandbox.credentials }}
+            {{- if .Values.hatchet.token }}
             - secretRef:
                 name: {{ include "brickie.fullname" . }}
             {{- end }}
@@ -75,23 +74,19 @@ spec:
             - secretRef:
                 name: {{ .Values.hatchet.existingSecret }}
             {{- end }}
-            {{- if .Values.sandbox.existingCredentialsSecret }}
+            {{- if .Values.storeSecret }}
             - secretRef:
-                name: {{ .Values.sandbox.existingCredentialsSecret }}
-            {{- end }}
-            {{- if .Values.objectStoreSecret }}
-            - secretRef:
-                name: {{ .Values.objectStoreSecret }}
+                name: {{ .Values.storeSecret }}
             {{- end }}
           volumeMounts:
-            - name: snapshots
-              mountPath: /var/lib/brickie/snapshots
+            - name: store
+              mountPath: /var/lib/brickie
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       volumes:
-        - name: snapshots
+        - name: store
           emptyDir: {}
       {{- with .Values.nodeSelector }}
       nodeSelector:
