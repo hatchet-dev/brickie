@@ -37,7 +37,7 @@ The chart defaults to Kata Containers (`sandbox.runtime: kata`). Kata runs each 
 - **EKS:** a managed nodegroup of bare-metal x86 instances (`m5.metal`, `c5.metal`, `m6i.metal`, `c6i.metal`). Cloud Hypervisor is amd64-only, so no Graviton.
 - The kata-deploy DaemonSet is privileged, writes the Kata runtime to each node, and configures containerd. Use `kata-deploy.nodeSelector` to limit it to the sandbox nodes.
 
-To use gVisor instead: `--set sandbox.runtime=gvisor --set gvisor.install=true --set kata-deploy.enabled=false`. gVisor runs on any instance type. Its installer is also a privileged DaemonSet.
+To use gVisor instead: `--set sandbox.runtime=gvisor --set gvisor.install=true --set kata-deploy.enabled=false`. gVisor runs on any instance type. Its installer is also a privileged DaemonSet; `gvisor.nodeSelector` limits it to the sandbox nodes and makes the `gvisor` RuntimeClass schedule only there.
 
 If your cluster already provides a runtime class, disable both installers and set `sandbox.runtime` to `kata`, `gvisor`, or `none`. The provider looks for the classes `kata-clh` and `gvisor`.
 
@@ -115,7 +115,7 @@ The provider never needs cluster-admin. It cannot create pods, exec into pods, o
 | `store`, `storeSecret` | none | Bucket URL and, if not using workload identity, a Secret with its credentials |
 | `networkPolicy.enabled`, `allowDNS`, `egressCIDRs` | `true`, `true`, `[]` | Sandbox pod isolation |
 | `kata-deploy.*` | Cloud Hypervisor only, DaemonSet mode | Passed to the bundled kata-deploy chart |
-| `gvisor.install`, `gvisor.release` | `false`, `20261005.0` | gVisor installer |
+| `gvisor.install`, `gvisor.release`, `gvisor.nodeSelector` | `false`, `20261005.0`, `{}` | gVisor installer and where it runs |
 | `agent-sandbox.enabled` | `true` | Set to `false` if agent-sandbox is already on the cluster |
 | `slots` | `10` | Concurrent turns the provider accepts |
 

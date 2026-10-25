@@ -59,7 +59,6 @@ type Options struct {
 	Staging      driver.Staging
 }
 
-// Driver binds sandboxes to warm pods and runs turns against their sandboxd.
 type Driver struct {
 	opts         Options
 	client       ctrlclient.Client
@@ -411,7 +410,6 @@ func (d *Driver) lock(name string) *sync.Mutex {
 	return mu
 }
 
-// Live reports the ready claims and when each last ran a turn.
 func (d *Driver) Live(ctx context.Context) map[string]time.Time {
 	var claims extensionsv1beta1.SandboxClaimList
 	if err := d.client.List(ctx, &claims, ctrlclient.InNamespace(d.opts.Namespace), ctrlclient.HasLabels{sandboxLabel}); err != nil {
@@ -478,17 +476,22 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	case fresh && !starting:
 		return engine.TurnResponse{}, fmt.Errorf("sandbox %s was replaced (its pod restarted) and its live workspace is lost: connect to it again to restore the latest snapshot", req.SandboxID)
 	case fresh:
-		if err := c.Write(ctx, markerFile, strings.NewReader(req.SandboxID), int64(len(req.SandboxID))); err != nil {
-			return engine.TurnResponse{}, fmt.Errorf("sandbox %s: %w", req.SandboxName, err)
-		}
 		req.Logf("sandbox %s bound to pod %s from pool %s", req.SandboxName, claim.Status.SandboxStatus.Name, claim.Spec.WarmPoolRef.Name)
 	default:
 		req.Logf("sandbox %s reused (pod %s)", req.SandboxName, claim.Status.SandboxStatus.Name)
 	}
 	driver.Phase(timings, "claim", start)
+	if err := d.touch(ctx, req.SandboxName, ttl+driver.Timeout(req)); err != nil {
+		return engine.TurnResponse{}, fmt.Errorf("sandbox %s: hold claim: %w", req.SandboxName, err)
+	}
 	resp, err := driver.Run(ctx, c, req, fresh, timings, driver.Options{MaxFileBytes: d.opts.MaxFileBytes, Staging: d.opts.Staging})
 	if err != nil {
 		return engine.TurnResponse{}, err
+	}
+	if fresh {
+		if err := c.Write(ctx, markerFile, strings.NewReader(req.SandboxID), int64(len(req.SandboxID))); err != nil {
+			return engine.TurnResponse{}, fmt.Errorf("sandbox %s: %w", req.SandboxName, err)
+		}
 	}
 	if err := d.touch(ctx, req.SandboxName, ttl); err != nil {
 		req.Logf("extend sandbox %s deadline failed: %v", req.SandboxName, err)

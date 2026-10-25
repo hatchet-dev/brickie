@@ -18,18 +18,26 @@ import (
 
 const restoreName = ".brickie-restore.tar.gz"
 
-// Staging is the store that carries files larger than MaxFileBytes.
 type Staging = fsops.Staging
 
-// Options are the per-turn limits a driver passes through.
 type Options struct {
 	MaxFileBytes int64
 	Staging      Staging
 }
 
-// Phase records how long a named step of a turn took.
 func Phase(timings map[string]int64, name string, start time.Time) {
 	timings[name] = time.Since(start).Milliseconds()
+}
+
+// Timeout is how long a turn may hold its sandbox beyond the idle TTL: the
+// command timeout for $command, nothing for the rest.
+func Timeout(req engine.TurnRequest) time.Duration {
+	if req.Fn != engine.CommandFn {
+		return 0
+	}
+	var in engine.CommandInput
+	_ = json.Unmarshal(req.Input, &in)
+	return time.Duration(in.TimeoutMs) * time.Millisecond
 }
 
 // Run executes one turn on a sandbox that is already up. fresh says the
