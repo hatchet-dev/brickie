@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// TaskName is the Hatchet task every SDK call runs.
 const TaskName = "brickie-sandbox"
 
 // Turn functions the SDK can request. Create, Connect, and Destroy manage the
@@ -23,7 +22,6 @@ const (
 	DestroyFn = "$destroy"
 )
 
-// TurnInput is the task input the SDK sends.
 type TurnInput struct {
 	SandboxID  string            `json:"sandboxId,omitempty"`
 	Image      string            `json:"image,omitempty"`
@@ -34,7 +32,6 @@ type TurnInput struct {
 	IdleTTLMs  int64             `json:"idleTtlMs,omitempty"`
 }
 
-// TurnResult is the task output the SDK reads.
 type TurnResult struct {
 	Output     json.RawMessage  `json:"output"`
 	SandboxID  string           `json:"sandboxId"`
@@ -42,7 +39,6 @@ type TurnResult struct {
 	Timings    map[string]int64 `json:"timings,omitempty"`
 }
 
-// TurnRequest is one turn as the driver sees it.
 type TurnRequest struct {
 	SandboxID    string
 	SandboxName  string
@@ -57,14 +53,12 @@ type TurnRequest struct {
 	Log          func(message string)
 }
 
-// Logf writes to the turn log when there is one.
 func (r TurnRequest) Logf(format string, args ...any) {
 	if r.Log != nil {
 		r.Log(fmt.Sprintf(format, args...))
 	}
 }
 
-// TurnResponse is what a driver returns from a turn.
 type TurnResponse struct {
 	Output      json.RawMessage
 	SnapshotTar []byte
@@ -102,13 +96,11 @@ type SandboxInfo struct {
 	LastUsed       *time.Time        `json:"lastUsed,omitempty"`
 }
 
-// CommandInput is the input of a $command turn.
 type CommandInput struct {
 	Cmd       string `json:"cmd"`
 	TimeoutMs int64  `json:"timeoutMs,omitempty"`
 }
 
-// CommandOutput is the output of a $command turn.
 type CommandOutput struct {
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`

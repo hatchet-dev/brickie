@@ -47,7 +47,6 @@ type Options struct {
 	Staging      driver.Staging
 }
 
-// Driver owns sandbox lifecycle and turn dispatch on one Docker engine.
 type Driver struct {
 	cli      *client.Client
 	opts     Options
@@ -213,15 +212,22 @@ func (d *Driver) destroy(name string) {
 func (d *Driver) reap() {
 	for range time.Tick(time.Minute) {
 		d.mu.Lock()
-		var idle []string
+		idle := map[string]*liveSandbox{}
 		for name, sb := range d.live {
-			if time.Since(sb.lastUsed) > sb.ttl {
-				idle = append(idle, name)
+			if sb.mu.TryLock() {
+				if time.Since(sb.lastUsed) > sb.ttl {
+					idle[name] = sb
+				}
+				sb.mu.Unlock()
 			}
 		}
 		d.mu.Unlock()
-		for _, name := range idle {
-			d.destroy(name)
+		for name, sb := range idle {
+			sb.mu.Lock()
+			if time.Since(sb.lastUsed) > sb.ttl {
+				d.destroy(name)
+			}
+			sb.mu.Unlock()
 		}
 	}
 }
@@ -272,6 +278,7 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 	sb.lastUsed = time.Now()
+	defer func() { sb.lastUsed = time.Now() }()
 	driver.Phase(timings, "claim", start)
 	if fresh {
 		req.Logf("sandbox %s created", req.SandboxName)

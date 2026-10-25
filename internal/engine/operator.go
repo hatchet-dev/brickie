@@ -31,7 +31,6 @@ type operatorProvider struct {
 	inFlight map[string]context.CancelFunc
 }
 
-// RunOperatorProvider serves the sandbox task as a Hatchet gRPC operator until ctx ends.
 func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) error {
 	runner := newTurnRunner(opts)
 	token := os.Getenv("HATCHET_CLIENT_TOKEN")

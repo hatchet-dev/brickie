@@ -44,7 +44,6 @@ type Registry struct {
 
 var _ Provider = (*Registry)(nil)
 
-// Resolve returns the ref as given, or the default when the spec names none.
 func (r Registry) Resolve(_ context.Context, spec Spec) (Resolved, error) {
 	if spec.Build != nil {
 		return Resolved{}, errors.New("the registry image provider only accepts a pre-built image ref, not a build spec")
