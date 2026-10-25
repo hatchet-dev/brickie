@@ -11,7 +11,6 @@ import (
 	"github.com/hatchet-dev/brickie/internal/image"
 )
 
-// ProviderOpts wires a driver and a store into the provider.
 type ProviderOpts struct {
 	Driver        Driver
 	Store         *Store

@@ -29,7 +29,6 @@ import (
 // latest-main tag from its staging registry.
 const Image = "us-central1-docker.pkg.dev/k8s-staging-images/agent-sandbox/sandboxd@sha256:141be71c5a3106cdd2cd3d33461acaa50a3e9945d3611239e91f803e06350bfa"
 
-// Daemon paths and ports, the same in every sandbox.
 const (
 	ImageBinary = "/usr/local/bin/sandboxd"
 	Workspace   = "/workspace"
@@ -45,7 +44,6 @@ func Args(token string) []string {
 	return []string{"--root-dir", Workspace, "--listen-host", "0.0.0.0", "--auth-token-sha256", hex.EncodeToString(sum[:])}
 }
 
-// NewToken makes a random bearer token for one provider or namespace.
 func NewToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -54,7 +52,6 @@ func NewToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// Entry is one row of a directory listing.
 type Entry struct {
 	Name       string `json:"name"`
 	Size       int64  `json:"size"`
@@ -67,7 +64,6 @@ type listing struct {
 	Entries []Entry `json:"entries"`
 }
 
-// Error is a REST failure as the daemon reported it.
 type Error struct {
 	Status  int
 	Code    string `json:"code"`
@@ -76,16 +72,13 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Message }
 
-// IsNotFound reports a 404 from the daemon.
 func IsNotFound(err error) bool {
 	e, ok := errors.AsType[*Error](err)
 	return ok && e.Status == http.StatusNotFound
 }
 
-// ErrNotDirectory is returned by List on a file path.
 var ErrNotDirectory = errors.New("not a directory")
 
-// Result is what a command produced.
 type Result struct {
 	Stdout   []byte
 	Stderr   string
@@ -100,7 +93,6 @@ func (b bearer) GetRequestMetadata(context.Context, ...string) (map[string]strin
 
 func (bearer) RequireTransportSecurity() bool { return false }
 
-// Client talks to one daemon.
 type Client struct {
 	conn  *grpc.ClientConn
 	proc  processv1.ProcessServiceClient
@@ -141,7 +133,6 @@ func Dial(ctx context.Context, grpcAddr, restAddr, token string) (*Client, error
 	}
 }
 
-// Close drops the gRPC connection.
 func (c *Client) Close() {
 	if c != nil && c.conn != nil {
 		_ = c.conn.Close()
@@ -258,7 +249,6 @@ func (c *Client) Open(ctx context.Context, p string) (io.ReadCloser, error) {
 	return res.Body, nil
 }
 
-// List returns the entries of a directory.
 func (c *Client) List(ctx context.Context, p string) ([]Entry, error) {
 	res, err := c.do(ctx, http.MethodGet, p, nil, nil, 0)
 	if err != nil {
@@ -304,7 +294,6 @@ func (c *Client) Write(ctx context.Context, p string, r io.Reader, size int64) e
 	return res.Body.Close()
 }
 
-// Remove deletes a file, or a whole tree when recursive.
 func (c *Client) Remove(ctx context.Context, p string, recursive bool) error {
 	q := url.Values{}
 	if recursive {

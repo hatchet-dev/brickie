@@ -252,7 +252,7 @@ func runFS(ctx context.Context, c *sandboxd.Client, fn string, in fsInput, opts 
 		if _, err := c.Stat(ctx, p); err == nil {
 			return map[string]any{"created": false}, false, nil
 		}
-		if err := mustRun(ctx, c, "mkdir", "-p", p); err != nil {
+		if err := mustRun(ctx, c, "mkdir", "-p", "--", p); err != nil {
 			return nil, false, err
 		}
 		return map[string]any{"created": true}, true, nil
@@ -264,11 +264,11 @@ func runFS(ctx context.Context, c *sandboxd.Client, fn string, in fsInput, opts 
 		if _, err := c.Stat(ctx, p); err != nil {
 			return nil, false, err
 		}
-		argv := []string{"mv", p, np}
+		argv := []string{"mv", "-T", "--", p, np}
 		if fn == Prefix+"copy" {
-			argv = []string{"cp", "-a", p, np}
+			argv = []string{"cp", "-aT", "--", p, np}
 		}
-		if err := mustRun(ctx, c, "mkdir", "-p", path.Dir(np)); err != nil {
+		if err := mustRun(ctx, c, "mkdir", "-p", "--", path.Dir(np)); err != nil {
 			return nil, false, err
 		}
 		if err := mustRun(ctx, c, argv...); err != nil {

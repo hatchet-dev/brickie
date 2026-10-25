@@ -32,7 +32,6 @@ type Store struct {
 	dir    string
 }
 
-// DefaultStoreURL is a directory under the home directory.
 func DefaultStoreURL() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -65,34 +64,28 @@ func OpenStore(ctx context.Context, rawURL string) (*Store, error) {
 	return s, nil
 }
 
-// Close releases the bucket.
 func (s *Store) Close() error { return s.bucket.Close() }
 
 // Local reports a file:// store, which only the provider's own machine can reach.
 func (s *Store) Local() bool { return s.dir != "" }
 
-// ReadSnapshot returns the workspace tar made by a turn.
 func (s *Store) ReadSnapshot(ctx context.Context, id string) ([]byte, error) {
 	return s.bucket.ReadAll(ctx, "snapshots/"+id+".tar.gz")
 }
 
-// WriteSnapshot stores a workspace tar under the turn id.
 func (s *Store) WriteSnapshot(ctx context.Context, id string, tar []byte) error {
 	return s.bucket.WriteAll(ctx, "snapshots/"+id+".tar.gz", tar, nil)
 }
 
-// Latest returns the id of the newest snapshot of a sandbox.
 func (s *Store) Latest(ctx context.Context, sandboxID string) (string, error) {
 	b, err := s.bucket.ReadAll(ctx, "latest/"+sandboxID)
 	return strings.TrimSpace(string(b)), err
 }
 
-// SetLatest records the newest snapshot of a sandbox.
 func (s *Store) SetLatest(ctx context.Context, sandboxID, snapshotID string) error {
 	return s.bucket.WriteAll(ctx, "latest/"+sandboxID, []byte(snapshotID), nil)
 }
 
-// Meta returns what a sandbox was created with.
 func (s *Store) Meta(ctx context.Context, sandboxID string) (SandboxMeta, error) {
 	var m SandboxMeta
 	b, err := s.bucket.ReadAll(ctx, "meta/"+sandboxID+".json")
@@ -102,7 +95,6 @@ func (s *Store) Meta(ctx context.Context, sandboxID string) (SandboxMeta, error)
 	return m, json.Unmarshal(b, &m)
 }
 
-// SetMeta records what a sandbox was created with.
 func (s *Store) SetMeta(ctx context.Context, meta SandboxMeta) error {
 	b, err := json.Marshal(meta)
 	if err != nil {
@@ -111,7 +103,6 @@ func (s *Store) SetMeta(ctx context.Context, meta SandboxMeta) error {
 	return s.bucket.WriteAll(ctx, "meta/"+meta.SandboxID+".json", b, nil)
 }
 
-// ListMeta returns every sandbox this store knows.
 func (s *Store) ListMeta(ctx context.Context) ([]SandboxMeta, error) {
 	metas := []SandboxMeta{}
 	iter := s.bucket.List(&blob.ListOptions{Prefix: "meta/"})
@@ -129,27 +120,28 @@ func (s *Store) ListMeta(ctx context.Context) ([]SandboxMeta, error) {
 	}
 }
 
-// Prune deletes everything older than maxAge.
+// Prune deletes the provider's own objects older than maxAge and leaves the
+// rest of the bucket alone.
 func (s *Store) Prune(ctx context.Context, maxAge time.Duration) {
 	cutoff := time.Now().Add(-maxAge)
-	iter := s.bucket.List(nil)
-	for {
-		obj, err := iter.Next(ctx)
-		if err != nil {
-			return
-		}
-		if obj.ModTime.Before(cutoff) {
-			_ = s.bucket.Delete(ctx, obj.Key)
+	for _, prefix := range []string{"snapshots/", "latest/", "meta/", "staging/"} {
+		iter := s.bucket.List(&blob.ListOptions{Prefix: prefix})
+		for {
+			obj, err := iter.Next(ctx)
+			if err != nil {
+				break
+			}
+			if obj.ModTime.Before(cutoff) {
+				_ = s.bucket.Delete(ctx, obj.Key)
+			}
 		}
 	}
 }
 
-// NewKey returns a fresh staging key owned by a sandbox.
 func (s *Store) NewKey(sandboxID string) string {
 	return "staging/" + sandboxID + "/" + uuid.NewString()
 }
 
-// Presign returns a PUT and a GET URL for a key, both valid for stagingURLExpiry.
 func (s *Store) Presign(ctx context.Context, key string) (putURL, getURL string, err error) {
 	if s.dir != "" {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(s.dir, key)), 0o700); err != nil {
@@ -166,7 +158,6 @@ func (s *Store) Presign(ctx context.Context, key string) (putURL, getURL string,
 	return putURL, getURL, err
 }
 
-// GetURL returns a presigned GET URL for a staged file.
 func (s *Store) GetURL(ctx context.Context, key string) (string, error) {
 	if s.dir != "" {
 		return "file://" + filepath.Join(s.dir, key), nil
@@ -174,12 +165,10 @@ func (s *Store) GetURL(ctx context.Context, key string) (string, error) {
 	return s.bucket.SignedURL(ctx, key, &blob.SignedURLOptions{Method: "GET", Expiry: stagingURLExpiry})
 }
 
-// Open streams a staged file.
 func (s *Store) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	return s.bucket.NewReader(ctx, key, nil)
 }
 
-// Put streams bytes into a staged file.
 func (s *Store) Put(ctx context.Context, key string, r io.Reader) error {
 	w, err := s.bucket.NewWriter(ctx, key, nil)
 	if err != nil {

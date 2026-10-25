@@ -12,6 +12,32 @@ linters:
     - unconvert
     - unused
   settings:
+    revive:
+      # golangci's default revive set minus exported and package-comments,
+      # which demand a doc comment on every exported name; AGENTS.md forbids
+      # comments that only restate the code.
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: empty-block
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: unused-parameter
+        - name: var-declaration
+        - name: var-naming
     govet:
       enable-all: true
       disable:
