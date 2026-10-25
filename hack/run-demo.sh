@@ -96,12 +96,12 @@ if [ -x bin/brickie ] && [ -z "$(find cmd internal go.mod go.sum -newer bin/bric
   ok "sandbox provider binary is up to date"
 else
   confirm "the sandbox provider is a Go program, but you don't need Go — we compile it inside a golang container" \
-    "docker run --rm -v \$PWD:/src golang:1.27 go build -o bin/brickie ./cmd/brickie"
+    "docker run --rm -v \$PWD:/src golang:1.27.3 go build -o bin/brickie ./cmd/brickie"
   docker run --rm -v "$PWD:/src" -w /src \
     -v brickie_go_cache:/go/pkg/mod -v brickie_go_build:/root/.cache/go-build \
     -e CGO_ENABLED=0 -e GOOS="$(uname -s | tr '[:upper:]' '[:lower:]')" \
     -e GOARCH="$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')" \
-    golang:1.27 go build -o bin/brickie ./cmd/brickie
+    golang:1.27.3 go build -o bin/brickie ./cmd/brickie
   REBUILT=1
 fi
 
