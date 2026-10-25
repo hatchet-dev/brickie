@@ -1,3 +1,4 @@
+// Command brickie runs the sandbox provider.
 package main
 
 import (

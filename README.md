@@ -44,16 +44,16 @@ await again.exec('cat haiku.txt');
 
 - `hatchet.sandbox.create(options)` starts a sandbox. `connect(id)` continues one. `list({ metadata })` finds them.
 - `sandbox.exec(cmd, { timeoutMs })` runs a shell command. A timeout returns exit code 124. `sandbox.files` reads and writes files. `sandbox.kill()` removes the sandbox.
-- `files.read` and `files.write` carry up to `--max-file-bytes` (2 MiB) through a Hatchet task. Larger files go through the provider's `--object-store` and never enter Hatchet. On a laptop that is a directory (`file://`); in production, S3, GCS, or Azure Blob. `files.download` and `files.upload` move files between the workspace and an https URL. The sandbox needs no network for any of this.
+- `files.read` and `files.write` carry up to `--max-file-bytes` (2 MiB) through a Hatchet task. Larger files go through the provider's `--store` and never enter Hatchet. On a laptop that is a directory (`file://`); in production, S3, GCS, or Azure Blob. `files.download` and `files.upload` move files between the workspace and an https URL. The sandbox needs no network for any of this.
 - In a durable task, each call is a step in the event log. Outside one, each call is a plain task run.
 
 The full reference is in TypeDoc. Run `pnpm docs` in `sdks/typescript` and open `sdks/typescript/docs/index.html`.
 
 ## Isolation
 
-On a laptop, a sandbox is a plain container on the local Docker engine. Good for development and CI. It is not a VM. For untrusted agents, run brickie on Kubernetes with gVisor or Kata Containers.
+On a laptop, a sandbox is a plain container on the local Docker engine. Good for development and CI. It is not a VM. For untrusted agents, run the provider with `--driver kubernetes`. Each sandbox is then an [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) claim bound to a pre-started pod, under gVisor or Kata Containers when the cluster has the runtime class. `hack/e2e-kind.sh` runs the whole path on a local kind cluster. `docs/SECURITY.md` describes the trust boundaries.
 
-Each container runs [`sandboxd`](https://github.com/kubernetes-sigs/agent-sandbox/blob/main/packages/sandboxd/USER_GUIDE.md), the agent-sandbox runtime daemon, as its process. The provider injects the binary and talks to it on a loopback port. The daemon starts commands, streams their output, and kills the whole process group on a timeout. The image needs only `sh`, and `tar` for restore.
+Each sandbox runs [`sandboxd`](https://github.com/kubernetes-sigs/agent-sandbox/blob/main/packages/sandboxd/USER_GUIDE.md), the agent-sandbox runtime daemon, as its process. The provider injects the binary and talks to it with a bearer token: commands over gRPC, files over REST. The daemon starts commands, streams their output, and kills the whole process group on a timeout. The image needs only `sh`, and `tar` for snapshots.
 
 No host environment variables reach a sandbox. The provider removes a sandbox after `--sandbox-idle-ttl` without a call, or after the `idleTimeoutMs` given at create. Its snapshots stay, so `connect` can bring it back.
 

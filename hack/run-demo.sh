@@ -79,7 +79,6 @@ fi
 
 if [ -f .env ] && grep -q HATCHET_CLIENT_TOKEN .env; then
   ok "hatchet token is in .env"
-  grep -q BRICKIE_OBJECT_STORE .env || echo "BRICKIE_OBJECT_STORE=file://$STATE_DIR/staging" >> .env
 else
   confirm "your programs and the sandbox provider authenticate to Hatchet with a token; we mint one and store it only in .env (mode 0600, git-ignored)" \
     "docker compose exec hatchet ./hatchet-admin token create ... >> .env"
@@ -88,7 +87,6 @@ else
   {
     echo "HATCHET_CLIENT_TOKEN=$TOKEN"
     echo "HATCHET_CLIENT_TLS_STRATEGY=none"
-    echo "BRICKIE_OBJECT_STORE=file://$STATE_DIR/staging"
   } >> .env
   umask 022
 fi
@@ -158,7 +156,7 @@ cat <<EOF
     dashboard   ${EXTERNAL_HATCHET:+your hatchet instance}${EXTERNAL_HATCHET:-http://localhost:8888  (admin@example.com / Admin123!!)}
     provider    tail -f $LOG_FILE   (stop: kill \$(cat $PID_FILE))
     token       .env (HATCHET_CLIENT_TOKEN, mode 0600)
-    staging     $STATE_DIR/staging (files over 2 MiB bypass Hatchet through it)
+    store       $STATE_DIR/store (snapshots; files over 2 MiB bypass Hatchet through it)
     sandboxes   Docker containers (alpine:3) on the local engine
                 no host env vars are injected
 
