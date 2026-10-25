@@ -176,7 +176,7 @@ func (d *Driver) ensureToken(ctx context.Context) error {
 			return tokenErr
 		}
 		s, err = secrets.Create(ctx, &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: tokenSecret, Namespace: d.opts.Namespace},
+			Name: tokenSecret, Namespace: d.opts.Namespace,
 			StringData: map[string]string{"token": token},
 		}, metav1.CreateOptions{})
 		if apierrors.IsAlreadyExists(err) {
@@ -214,7 +214,7 @@ func (d *Driver) podSpec(image string) corev1.PodSpec {
 				{Name: "grpc", ContainerPort: sandboxd.GRPCPort},
 			},
 			ReadinessProbe: &corev1.Probe{
-				ProbeHandler:  corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/v1/health", Port: intstr.FromInt32(sandboxd.RESTPort)}},
+				HTTPGet:       &corev1.HTTPGetAction{Path: "/v1/health", Port: intstr.FromInt32(sandboxd.RESTPort)},
 				PeriodSeconds: 2,
 			},
 			SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: &no},
@@ -224,8 +224,8 @@ func (d *Driver) podSpec(image string) corev1.PodSpec {
 			},
 		}},
 		Volumes: []corev1.Volume{
-			{Name: "brickie", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-			{Name: "workspace", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+			{Name: "brickie", EmptyDir: &corev1.EmptyDirVolumeSource{}},
+			{Name: "workspace", EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		},
 	}
 	if d.runtimeClass != "" {
@@ -249,7 +249,7 @@ func (d *Driver) ensurePool(ctx context.Context, image string) (string, error) {
 	}
 	name := poolName(image)
 	tmpl := &extensionsv1beta1.SandboxTemplate{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: d.opts.Namespace},
+		Name: name, Namespace: d.opts.Namespace,
 		Spec: extensionsv1beta1.SandboxTemplateSpec{
 			SandboxBlueprint:        sandboxv1beta1.SandboxBlueprint{PodTemplate: sandboxv1beta1.PodTemplate{Spec: d.podSpec(image)}},
 			NetworkPolicyManagement: extensionsv1beta1.NetworkPolicyManagementUnmanaged,
@@ -257,7 +257,7 @@ func (d *Driver) ensurePool(ctx context.Context, image string) (string, error) {
 	}
 	replicas := int32(min(d.opts.WarmReplicas, 1000)) // #nosec G115 -- bounded above
 	pool := &extensionsv1beta1.SandboxWarmPool{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: d.opts.Namespace},
+		Name: name, Namespace: d.opts.Namespace,
 		Spec: extensionsv1beta1.SandboxWarmPoolSpec{
 			Replicas:       &replicas,
 			TemplateRef:    extensionsv1beta1.SandboxTemplateRef{Name: name},
@@ -319,7 +319,7 @@ func (d *Driver) getClaim(ctx context.Context, name string) (*extensionsv1beta1.
 func (d *Driver) ensureClaim(ctx context.Context, pool string, req engine.TurnRequest, ttl time.Duration) (*extensionsv1beta1.SandboxClaim, error) {
 	newClaim := func() *extensionsv1beta1.SandboxClaim {
 		return &extensionsv1beta1.SandboxClaim{
-			ObjectMeta: metav1.ObjectMeta{Name: req.SandboxName, Namespace: d.opts.Namespace, Labels: map[string]string{sandboxLabel: req.SandboxID}},
+			Name: req.SandboxName, Namespace: d.opts.Namespace, Labels: map[string]string{sandboxLabel: req.SandboxID},
 			Spec: extensionsv1beta1.SandboxClaimSpec{
 				WarmPoolRef:           extensionsv1beta1.SandboxWarmPoolRef{Name: pool},
 				Lifecycle:             &extensionsv1beta1.Lifecycle{ShutdownTime: shutdownTime(ttl), ShutdownPolicy: extensionsv1beta1.ShutdownPolicyDelete},
@@ -391,7 +391,7 @@ func (d *Driver) touch(ctx context.Context, name string, ttl time.Duration) erro
 		"metadata": map[string]any{"annotations": map[string]string{lastUsedAnnotation: time.Now().UTC().Format(time.RFC3339)}},
 		"spec":     map[string]any{"lifecycle": map[string]any{"shutdownTime": shutdownTime(ttl)}},
 	})
-	claim := &extensionsv1beta1.SandboxClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: d.opts.Namespace}}
+	claim := &extensionsv1beta1.SandboxClaim{Name: name, Namespace: d.opts.Namespace}
 	return d.client.Patch(ctx, claim, ctrlclient.RawPatch(types.MergePatchType, body))
 }
 
@@ -438,7 +438,7 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 	mu.Lock()
 	defer mu.Unlock()
 	if req.Fn == engine.DestroyFn {
-		claim := &extensionsv1beta1.SandboxClaim{ObjectMeta: metav1.ObjectMeta{Name: req.SandboxName, Namespace: d.opts.Namespace}}
+		claim := &extensionsv1beta1.SandboxClaim{Name: req.SandboxName, Namespace: d.opts.Namespace}
 		if err := d.client.Delete(ctx, claim); err != nil && !apierrors.IsNotFound(err) {
 			return engine.TurnResponse{}, fmt.Errorf("delete sandbox claim %s: %w", req.SandboxName, err)
 		}

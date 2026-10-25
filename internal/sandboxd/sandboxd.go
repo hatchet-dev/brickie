@@ -22,7 +22,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/proto"
 	processv1 "sigs.k8s.io/agent-sandbox/packages/sandboxd/spec/process/v1"
 )
 
@@ -171,7 +170,7 @@ func (c *Client) health(ctx context.Context) error {
 // Run executes argv in the workspace. After timeout the daemon kills the whole
 // process group and the result reports exit code 124.
 func (c *Client) Run(ctx context.Context, argv []string, timeout time.Duration) (Result, error) {
-	stream, err := c.proc.Start(ctx, &processv1.StartRequest{Config: &processv1.ProcessConfig{Command: argv, Cwd: proto.String(Workspace)}})
+	stream, err := c.proc.Start(ctx, &processv1.StartRequest{Config: &processv1.ProcessConfig{Command: argv, Cwd: new(Workspace)}})
 	if err != nil {
 		return Result{}, fmt.Errorf("start %s: %w", strings.Join(argv, " "), err)
 	}
