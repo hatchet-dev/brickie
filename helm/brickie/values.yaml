@@ -17,10 +17,11 @@ replicaCount: 1
 # How many sandbox calls in Hatchet the provider runs at the same time.
 slots: 10
 
-# The provider image. Build from the repository Dockerfile for a private registry.
+# The provider image. An empty tag means the chart's appVersion. Build from the
+# repository Dockerfile for a private registry.
 image:
-  repository: # WIP: ghcr.io/hatchet-dev/brickie
-  tag: latest
+  repository: ghcr.io/hatchet-dev/brickie
+  tag: ""
   pullPolicy: IfNotPresent
 
 # Pull secrets for the provider image. Sandbox images are pulled by the sandbox

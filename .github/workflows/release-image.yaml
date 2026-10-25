@@ -14,11 +14,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Require an annotated tag
+      - name: Require an annotated tag that matches the chart appVersion
         run: |
           git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
           if [ "$(git cat-file -t "refs/tags/${GITHUB_REF_NAME}")" != "tag" ]; then
             echo "::error::${GITHUB_REF_NAME} is a lightweight tag; release images are built from annotated tags only (git tag -a)"
+            exit 1
+          fi
+          chart=$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' helm/brickie/Chart.yaml)
+          if [ "$chart" != "${GITHUB_REF_NAME#v}" ]; then
+            echo "::error::helm/brickie/Chart.yaml appVersion is ${chart} but the tag is ${GITHUB_REF_NAME#v}; bump it before tagging"
             exit 1
           fi
       - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0

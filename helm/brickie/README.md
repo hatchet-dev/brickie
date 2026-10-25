@@ -73,11 +73,9 @@ Without an enforcing CNI, any pod on the cluster can reach a sandbox daemon's po
 
 ### 5. Images
 
-WIP
-
-<!-- - The provider image: `ghcr.io/hatchet-dev/brickie`. For a private registry, build from the repository `Dockerfile`, push, and set `image.repository` and `image.tag`.
-- Sandbox images: any image with `sh` and `tar`. Set the default with `sandbox.image`; the SDK can pick another per sandbox. Pull secrets go in `imagePullSecrets`, which the sandbox namespace's default ServiceAccount must also carry.
-- The nodes pull `quay.io/kata-containers/kata-deploy` (Kata) or `alpine` plus `storage.googleapis.com/gvisor` (gVisor) during install. -->
+- The provider image: `ghcr.io/hatchet-dev/brickie`, tagged with each release; the chart defaults to its own `appVersion`. While the GitHub repository is private the package is private too, so give the provider a pull secret made from a GitHub token with `read:packages` and list it in `imagePullSecrets`. For a private registry, build from the repository `Dockerfile`, push, and set `image.repository` and `image.tag`.
+- Sandbox images: any image with `sh` and `tar`. Set the default with `sandbox.image`; the SDK can pick another per sandbox. Sandbox pods are pulled by the sandbox namespace's default ServiceAccount, so give that one its own pull secrets. Every sandbox pod also pulls the pinned `sandboxd` image from `us-central1-docker.pkg.dev/k8s-staging-images`.
+- The nodes pull `quay.io/kata-containers/kata-deploy` (Kata) or `alpine` plus `storage.googleapis.com/gvisor` (gVisor) during install.
 
 ### 6. Namespaces
 
@@ -105,7 +103,7 @@ The provider never needs cluster-admin. It cannot create pods, exec into pods, o
 | Value | Default | Meaning |
 | --- | --- | --- |
 | `hatchet.token` / `hatchet.existingSecret` | required | Hatchet client token |
-| `image.repository`, `image.tag` | WIP | Provider image |
+| `image.repository`, `image.tag` | `ghcr.io/hatchet-dev/brickie`, chart `appVersion` | Provider image |
 | `serviceAccount.annotations` | `{}` | For example the IRSA role ARN |
 | `sandbox.namespace` | release namespace | Where sandbox pods run |
 | `sandbox.image` | `alpine:3` | Default sandbox image |

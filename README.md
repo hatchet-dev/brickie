@@ -22,8 +22,12 @@ The demo is one durable task, `agent-session`, in `examples/typescript/demo.ts`.
 
 ## TypeScript SDK
 
+```bash
+pnpm add @hatchet-dev/sandbox @hatchet-dev/typescript-sdk
+```
+
 ```ts
-import '@hatchet/sandbox';
+import '@hatchet-dev/sandbox';
 
 const session = hatchet.durableTask({
   name: 'agent-session',
@@ -68,6 +72,17 @@ helm upgrade --install brickie ./helm/brickie --namespace brickie --create-names
 ```
 
 What to set up first (nodes with KVM, a bucket and its IAM role, a CNI that enforces NetworkPolicy, a Hatchet tenant with gRPC operators) is in [helm/brickie/README.md](helm/brickie/README.md).
+
+## Release
+
+The provider image and the SDK are versioned apart, the same way as the Hatchet engine and its SDKs.
+
+- **Provider image.** An annotated tag `v<version>` builds and pushes `ghcr.io/hatchet-dev/brickie:<version>`. The tag must match `appVersion` in `helm/brickie/Chart.yaml`, or the workflow stops before building.
+- **TypeScript SDK.** Bump `version` in `sdks/typescript/package.json` and merge to `main`. The workflow publishes `@hatchet-dev/sandbox` when that version is not on npm yet, and creates the GitHub release `ts/<version>`.
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0" && git push origin v0.1.0
+```
 
 ## Use an external Hatchet instance
 
