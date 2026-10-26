@@ -33,6 +33,8 @@ Build binaries to /tmp or use `go install`, do not commit binaries.
 - No host environment variables reach sandboxes; Claude auth lives in the Docker Sandboxes agent kit. Never widen this implicitly.
 - Do not add code comments except where the code cannot express a constraint. No comments explaining what the next line does.
 - First version of anything new is 0.1.0.
+- Every build of `brickie` runs in FIPS 140-3 mode: `//go:debug fips140=on` in `cmd/brickie/main.go` makes that true for any `go build`, and release builds pin the certified Go Cryptographic Module with `GOFIPS140=v1.0.0`, checked by `hack/check-fips.sh`. Do not remove either.
+- `CHANGELOG.md` (provider) and `sdks/typescript/CHANGELOG.md` (SDK) follow Keep a Changelog. A change goes under `Unreleased`; a release turns that into a `## [version] - date` section, which the release workflows read and refuse to ship without. Never edit a section that has been released.
 - The sandbox `template` option is a container image. Idle TTL is a provider setting; a turn is bounded by the SDK's `timeoutMs` and the calling task's own timeout, never by a provider flag.
 - A sandbox id is a run id or a caller-supplied id; the provider keeps a latest-snapshot pointer per sandbox and `$connect` resolves it. Never silently give a connect an empty workspace.
 

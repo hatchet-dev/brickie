@@ -8,6 +8,10 @@ builds:
     binary: brickie
     env:
       - CGO_ENABLED=0
+      - GOFIPS140=v1.0.0
+    hooks:
+      post:
+        - cmd: hack/check-fips.sh "{{ .Path }}"
     goos:
       - linux
       - darwin
@@ -18,6 +22,7 @@ builds:
       - v1
     ldflags:
       - -s -w
+      - -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.CommitDate}}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
@@ -33,6 +38,7 @@ archives:
     files:
       - LICENSE*
       - README*
+      - CHANGELOG*
 
 checksum:
   name_template: "checksums.txt"
@@ -41,7 +47,7 @@ snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
 changelog:
-  use: github
+  disable: true
 
 notarize:
   macos:

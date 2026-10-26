@@ -24,6 +24,8 @@ jobs:
             echo "::error::${GITHUB_REF_NAME} is a lightweight tag; releases are built from annotated tags only (git tag -a)"
             exit 1
           fi
+      - name: Release notes from CHANGELOG.md
+        run: hack/changelog-notes.sh CHANGELOG.md "${GITHUB_REF_NAME#v}" > "${RUNNER_TEMP}/notes.md"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -31,7 +33,7 @@ jobs:
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes=${{ runner.temp }}/notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}

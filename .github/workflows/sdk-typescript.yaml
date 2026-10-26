@@ -36,6 +36,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r typecheck
       - run: pnpm --filter ./sdks/typescript build
+      - name: The SDK version has a changelog section
+        run: hack/changelog-notes.sh sdks/typescript/CHANGELOG.md "$(node -p 'require("./sdks/typescript/package.json").version')" >/dev/null
 
   publish:
     needs: check
@@ -72,10 +74,11 @@ jobs:
             echo "release ts/${VERSION} exists"
             exit 0
           fi
+          hack/changelog-notes.sh sdks/typescript/CHANGELOG.md "$VERSION" > "${RUNNER_TEMP}/notes.md"
           gh release create "ts/${VERSION}" \
             --target "$GITHUB_SHA" \
             --title "TypeScript SDK ${VERSION}" \
-            --generate-notes \
+            --notes-file "${RUNNER_TEMP}/notes.md" \
             --latest=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -117,7 +117,7 @@ func workerCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "worker",
 		Short: "Run the sandbox provider as a Hatchet worker",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, cancel := cmdutils.NewInterruptContext()
 			defer cancel()
 			return runProvider(ctx, providerCfg)
