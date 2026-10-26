@@ -9,12 +9,14 @@ permissions:
   contents: read
 
 jobs:
-  binaries:
+  release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Require an annotated tag
         run: |
           git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
@@ -25,29 +27,15 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Build the provider for every platform
-        run: |
-          mkdir -p out
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            os=${target%/*} arch=${target#*/}
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -ldflags="-s -w" -o "out/brickie-$os-$arch" ./cmd/brickie
-          done
-      - name: Install quill
-        run: curl -sSfL https://raw.githubusercontent.com/anchore/quill/v0.7.1/install.sh | sh -s -- -b /usr/local/bin v0.7.1
-      - name: Sign and notarize the macOS binaries
-        run: |
-          for f in out/brickie-darwin-*; do
-            quill sign-and-notarize "$f" -vv
-          done
-        env:
-          QUILL_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
-          QUILL_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
-          QUILL_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-          QUILL_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-          QUILL_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
-      - name: Checksums
-        run: cd out && sha256sum brickie-* > SHA256SUMS
-      - name: Create the GitHub release with the binaries
-        run: gh release create "$GITHUB_REF_NAME" out/* --title "$GITHUB_REF_NAME" --generate-notes
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}

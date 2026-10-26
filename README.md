@@ -63,10 +63,11 @@ No host environment variables reach a sandbox. The provider removes a sandbox af
 
 ## Run the provider
 
-The provider is one process, `brickie worker`, on a machine with Docker. It connects out to Hatchet and needs nothing inbound. Run one per Hatchet tenant. Download the binary for your platform from the GitHub release and start it with the tenant token:
+The provider is one process, `brickie worker`, on a machine with Docker. It connects out to Hatchet and needs nothing inbound. Run one per Hatchet tenant. Download the archive for your platform from the GitHub release, unpack it, and start it with the tenant token:
 
 ```bash
-HATCHET_CLIENT_TOKEN=... ./brickie-linux-amd64 worker
+tar -xzf brickie_0.1.0_Linux_x86_64.tar.gz
+HATCHET_CLIENT_TOKEN=... ./brickie worker
 ```
 
 Snapshots live under `~/.brickie/snapshots` by default (`--snapshot-dir`). Files over 2 MiB need `--object-store`, a bucket or, on one machine, a `file://` directory the SDK can also reach. Flags and their `BRICKIE_*` environment variables are listed by `brickie worker --help`. This mode runs sandboxes as plain containers on the local engine, for development and single-tenant use; untrusted agents belong on the Kubernetes driver, which ships as a container image separately.
