@@ -72,11 +72,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: brickie
+      app.kubernetes.io/name: brickie
   template:
     metadata:
       labels:
-        app: brickie
+        app.kubernetes.io/name: brickie
     spec:
       serviceAccountName: brickie
       securityContext:

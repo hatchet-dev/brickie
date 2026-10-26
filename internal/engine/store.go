@@ -45,6 +45,9 @@ func DefaultStoreURL() string {
 // one machine, where the SDK and the provider share the directory.
 func OpenStore(ctx context.Context, rawURL string) (*Store, error) {
 	s := &Store{}
+	if u, err := url.Parse(rawURL); err == nil && u.Scheme != "file" && strings.Trim(u.Path, "/") != "" {
+		return nil, fmt.Errorf("open store %q: a prefix goes in the query, not the path: %s://%s?prefix=%s/", rawURL, u.Scheme, u.Host, strings.Trim(u.Path, "/"))
+	}
 	if u, err := url.Parse(rawURL); err == nil && u.Scheme == "file" {
 		s.dir = u.Path
 		if err := os.MkdirAll(s.dir, 0o700); err != nil {
@@ -69,13 +72,19 @@ func (s *Store) Close() error { return s.bucket.Close() }
 // Local reports a file:// store, which only the provider's own machine can reach.
 func (s *Store) Local() bool { return s.dir != "" }
 
-func (s *Store) ReadSnapshot(ctx context.Context, id string) ([]byte, error) {
-	return s.bucket.ReadAll(ctx, "snapshots/"+id+".tar.gz")
+func (s *Store) OpenSnapshot(ctx context.Context, id string) (*blob.Reader, error) {
+	return s.bucket.NewReader(ctx, "snapshots/"+id+".tar.gz", nil)
 }
 
-func (s *Store) WriteSnapshot(ctx context.Context, id string, tar []byte) error {
-	return s.bucket.WriteAll(ctx, "snapshots/"+id+".tar.gz", tar, nil)
+// NewSnapshotWriter streams a workspace tar into the store. Close commits it;
+// cancelling ctx first abandons it.
+func (s *Store) NewSnapshotWriter(ctx context.Context, id string) (*blob.Writer, error) {
+	return s.bucket.NewWriter(ctx, "snapshots/"+id+".tar.gz", nil)
 }
+
+// IsNotFound reports a store read of something that does not exist, as
+// opposed to a store that could not be read.
+func IsNotFound(err error) bool { return gcerrors.Code(err) == gcerrors.NotFound }
 
 func (s *Store) Latest(ctx context.Context, sandboxID string) (string, error) {
 	b, err := s.bucket.ReadAll(ctx, "latest/"+sandboxID)
@@ -150,7 +159,7 @@ func (s *Store) Presign(ctx context.Context, key string) (putURL, getURL string,
 		u := "file://" + filepath.Join(s.dir, key)
 		return u, u, nil
 	}
-	putURL, err = s.bucket.SignedURL(ctx, key, &blob.SignedURLOptions{Method: "PUT", Expiry: stagingURLExpiry, ContentType: "application/octet-stream"})
+	putURL, err = s.bucket.SignedURL(ctx, key, &blob.SignedURLOptions{Method: "PUT", Expiry: stagingURLExpiry})
 	if err != nil {
 		return "", "", err
 	}

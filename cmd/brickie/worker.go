@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hatchet-dev/hatchet/pkg/cmdutils"
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/hatchet-dev/brickie/internal/driver/docker"
 	"github.com/hatchet-dev/brickie/internal/driver/fsops"
@@ -43,16 +45,33 @@ func envOr(key, fallback string) string {
 }
 
 type providerConfig struct {
-	driver       string
-	image        string
-	store        string
-	idleTTL      time.Duration
-	maxIdleTTL   time.Duration
-	maxFile      int64
-	slots        int
-	namespace    string
-	runtime      string
-	warmReplicas int
+	driver            string
+	image             string
+	store             string
+	idleTTL           time.Duration
+	maxIdleTTL        time.Duration
+	maxFile           int64
+	maxSnapshot       int64
+	slots             int
+	namespace         string
+	runtime           string
+	warmReplicas      int
+	providerNamespace string
+	providerSelector  string
+	egress            string
+	cpu, memory, disk string
+}
+
+func parseSelector(s string) (map[string]string, error) {
+	out := map[string]string{}
+	for kv := range strings.SplitSeq(s, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(kv), "=")
+		if !ok || k == "" {
+			return nil, fmt.Errorf("selector %q: want key=value pairs separated by commas", s)
+		}
+		out[k] = v
+	}
+	return out, nil
 }
 
 var providerCfg providerConfig
@@ -69,6 +88,13 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 	f.StringVar(&providerCfg.namespace, "namespace", envOr("BRICKIE_SANDBOX_NAMESPACE", "default"), "kubernetes: namespace for sandbox pods and claims")
 	f.StringVar(&providerCfg.runtime, "runtime", envOr("BRICKIE_SANDBOX_RUNTIME", "auto"), "kubernetes: runtime class for sandbox pods: auto (kata, then gvisor), kata, gvisor, or none")
 	f.IntVar(&providerCfg.warmReplicas, "warm-replicas", int(envIntOr("BRICKIE_WARM_REPLICAS", 2)), "kubernetes: pre-started pods kept per image")
+	f.Int64Var(&providerCfg.maxSnapshot, "max-snapshot-bytes", envIntOr("BRICKIE_MAX_SNAPSHOT_BYTES", 1<<30), "largest workspace snapshot a turn may produce")
+	f.StringVar(&providerCfg.providerNamespace, "provider-namespace", envOr("BRICKIE_PROVIDER_NAMESPACE", ""), "kubernetes: namespace of this provider pod and its sandboxd token secret (default: the pod's own)")
+	f.StringVar(&providerCfg.providerSelector, "provider-selector", envOr("BRICKIE_PROVIDER_SELECTOR", "app.kubernetes.io/name=brickie"), "kubernetes: labels of this provider pod; only pods matching them may reach sandboxes")
+	f.StringVar(&providerCfg.egress, "sandbox-egress", envOr("BRICKIE_SANDBOX_EGRESS", "internet"), "kubernetes: what sandboxes may reach: internet (public addresses and cluster DNS) or none")
+	f.StringVar(&providerCfg.cpu, "sandbox-cpu", envOr("BRICKIE_SANDBOX_CPU", "1"), "kubernetes: cpu limit per sandbox")
+	f.StringVar(&providerCfg.memory, "sandbox-memory", envOr("BRICKIE_SANDBOX_MEMORY", "2Gi"), "kubernetes: memory limit per sandbox")
+	f.StringVar(&providerCfg.disk, "sandbox-disk", envOr("BRICKIE_SANDBOX_DISK", "10Gi"), "kubernetes: ephemeral storage limit per sandbox, including the workspace")
 }
 
 func runProvider(ctx context.Context, c providerConfig) error {
@@ -94,7 +120,17 @@ func runProvider(ctx context.Context, c providerConfig) error {
 		if store.Local() {
 			fmt.Fprintf(os.Stderr, "brickie: --store is a directory inside the provider pod; files larger than --max-file-bytes need an object store\n")
 		}
-		d, err := kubernetes.New(kubernetes.Options{Namespace: c.namespace, Image: c.image, Runtime: c.runtime, WarmReplicas: c.warmReplicas, IdleTTL: c.idleTTL, MaxFileBytes: c.maxFile, Staging: store})
+		selector, err := parseSelector(c.providerSelector)
+		if err != nil {
+			return err
+		}
+		opts := kubernetes.Options{Namespace: c.namespace, Image: c.image, Runtime: c.runtime, WarmReplicas: c.warmReplicas, IdleTTL: c.idleTTL, MaxFileBytes: c.maxFile, Staging: store, ProviderNamespace: c.providerNamespace, ProviderSelector: selector, Egress: c.egress}
+		for q, s := range map[*resource.Quantity]string{&opts.CPU: c.cpu, &opts.Memory: c.memory, &opts.Disk: c.disk} {
+			if *q, err = resource.ParseQuantity(s); err != nil {
+				return fmt.Errorf("sandbox resource %q: %w", s, err)
+			}
+		}
+		d, err := kubernetes.New(opts)
 		if err != nil {
 			return err
 		}
@@ -103,10 +139,11 @@ func runProvider(ctx context.Context, c providerConfig) error {
 		return fmt.Errorf("unknown driver %q (docker|kubernetes)", c.driver)
 	}
 	return engine.RunOperatorProvider(ctx, engine.ProviderOpts{
-		Driver:        drv,
-		Store:         store,
-		ImageProvider: image.Registry{Default: c.image},
-		MaxIdleTTL:    c.maxIdleTTL,
+		Driver:           drv,
+		Store:            store,
+		ImageProvider:    image.Registry{Default: c.image},
+		MaxIdleTTL:       c.maxIdleTTL,
+		MaxSnapshotBytes: c.maxSnapshot,
 	}, c.slots)
 }
 

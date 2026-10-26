@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -39,14 +40,19 @@ type TurnResult struct {
 	Timings    map[string]int64 `json:"timings,omitempty"`
 }
 
+// TurnRequest carries one turn to a driver. Snapshot, when set, is the
+// workspace tar to restore into a fresh sandbox; Checkpoint receives the tar
+// of the workspace after a mutating turn, streamed as it is produced.
 type TurnRequest struct {
 	SandboxID    string
 	SandboxName  string
 	Image        string
 	Fn           string
 	Input        json.RawMessage
-	SnapshotTar  []byte
+	Snapshot     io.Reader
+	SnapshotSize int64
 	SnapshotID   string
+	Checkpoint   io.Writer
 	CheckpointID string
 	IdleTTL      time.Duration
 	Metadata     map[string]string
@@ -61,7 +67,7 @@ func (r TurnRequest) Logf(format string, args ...any) {
 
 type TurnResponse struct {
 	Output      json.RawMessage
-	SnapshotTar []byte
+	Snapshotted bool
 	Timings     map[string]int64
 }
 

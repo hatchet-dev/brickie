@@ -98,10 +98,7 @@ async function putStaged(url: string, bytes: Buffer): Promise<void> {
 
 async function getStaged(url: string): Promise<Buffer> {
   if (url.startsWith('file://')) {
-    const path = decodeURIComponent(url.slice('file://'.length));
-    const bytes = await fs.readFile(path);
-    await fs.rm(path, { force: true });
-    return bytes;
+    return fs.readFile(decodeURIComponent(url.slice('file://'.length)));
   }
   const res = await fetch(url);
   if (!res.ok) throw new FilesystemError('staging_failed', `stage download failed: HTTP ${res.status}`);

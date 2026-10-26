@@ -36,6 +36,10 @@ const (
 	RESTPort    = 8080
 
 	readyTimeout = 90 * time.Second
+
+	// MaxOutputBytes caps what a command's stdout and stderr may each occupy in
+	// provider memory; the rest is dropped and the result says so.
+	MaxOutputBytes = 1 << 20
 )
 
 // Args are the daemon flags; the token itself never appears, only its digest.
@@ -85,6 +89,29 @@ type Result struct {
 	ExitCode int
 }
 
+type capped struct {
+	buf   bytes.Buffer
+	limit int
+	over  bool
+}
+
+func (w *capped) Write(p []byte) (int, error) {
+	if room := w.limit - w.buf.Len(); len(p) > room {
+		w.buf.Write(p[:room])
+		w.over = true
+	} else {
+		w.buf.Write(p)
+	}
+	return len(p), nil
+}
+
+func (w *capped) note(stderr, stream string) string {
+	if !w.over {
+		return stderr
+	}
+	return strings.TrimSpace(stderr + fmt.Sprintf("\n%s truncated at %d bytes", stream, w.limit))
+}
+
 type bearer string
 
 func (b bearer) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
@@ -110,8 +137,8 @@ func Dial(ctx context.Context, grpcAddr, restAddr, token string) (*Client, error
 	c := &Client{
 		conn:  conn,
 		proc:  processv1.NewProcessServiceClient(conn),
-		http:  &http.Client{},
-		rest:  &url.URL{Scheme: "http", Host: restAddr},
+		http:  &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		rest:  &url.URL{Scheme: "http", Host: restAddr, Path: "/"},
 		token: token,
 	}
 	deadline := time.Now().Add(readyTimeout)
@@ -158,16 +185,38 @@ func (c *Client) health(ctx context.Context) error {
 	return nil
 }
 
-// Run executes argv in the workspace. After timeout the daemon kills the whole
-// process group and the result reports exit code 124.
+// Run executes argv in the workspace and keeps up to MaxOutputBytes of each
+// stream. After timeout the daemon kills the whole process group and the
+// result reports exit code 124.
 func (c *Client) Run(ctx context.Context, argv []string, timeout time.Duration) (Result, error) {
+	stdout := &capped{limit: MaxOutputBytes}
+	res, err := c.RunTo(ctx, argv, stdout, timeout)
+	if err != nil {
+		return Result{}, err
+	}
+	res.Stdout = stdout.buf.Bytes()
+	res.Stderr = stdout.note(res.Stderr, "stdout")
+	return res, nil
+}
+
+// RunTo is Run with stdout streamed to w as it arrives. A write error kills the
+// process and fails the call.
+func (c *Client) RunTo(ctx context.Context, argv []string, w io.Writer, timeout time.Duration) (Result, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	stream, err := c.proc.Start(ctx, &processv1.StartRequest{Config: &processv1.ProcessConfig{Command: argv, Cwd: new(Workspace)}})
 	if err != nil {
 		return Result{}, fmt.Errorf("start %s: %w", strings.Join(argv, " "), err)
 	}
-	var stdout, stderr bytes.Buffer
+	kill := func(pid int32) {
+		kctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = c.proc.SendSignal(kctx, &processv1.SendSignalRequest{ProcessId: pid, Signal: processv1.Signal_SIGNAL_SIGKILL})
+	}
+	stderr := &capped{limit: MaxOutputBytes}
 	var timedOut atomic.Bool
 	var timer *time.Timer
+	var pid int32
 	code := -1
 	for {
 		ev, err := stream.Recv()
@@ -182,20 +231,24 @@ func (c *Client) Run(ctx context.Context, argv []string, timeout time.Duration) 
 		}
 		switch {
 		case ev.GetInit() != nil:
+			pid = ev.GetInit().GetProcessId()
 			if timeout > 0 {
-				pid := ev.GetInit().GetProcessId()
 				timer = time.AfterFunc(timeout, func() {
 					timedOut.Store(true)
-					kctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					defer cancel()
-					_, _ = c.proc.SendSignal(kctx, &processv1.SendSignalRequest{ProcessId: pid, Signal: processv1.Signal_SIGNAL_SIGKILL})
+					kill(pid)
 				})
 			}
 		case ev.GetExit() != nil:
 			code = int(ev.GetExit().GetExitCode())
 		default:
-			stdout.Write(ev.GetStdout())
-			stderr.Write(ev.GetStderr())
+			if _, err := w.Write(ev.GetStdout()); err != nil {
+				if timer != nil {
+					timer.Stop()
+				}
+				kill(pid)
+				return Result{}, fmt.Errorf("run %s: %w", strings.Join(argv, " "), err)
+			}
+			_, _ = stderr.Write(ev.GetStderr())
 		}
 		if ev.GetExit() != nil {
 			break
@@ -204,7 +257,7 @@ func (c *Client) Run(ctx context.Context, argv []string, timeout time.Duration) 
 	if timer != nil {
 		timer.Stop()
 	}
-	res := Result{Stdout: stdout.Bytes(), Stderr: stderr.String(), ExitCode: code}
+	res := Result{Stderr: stderr.note(stderr.buf.String(), "stderr"), ExitCode: code}
 	if timedOut.Load() {
 		res.ExitCode = 124
 		res.Stderr = strings.TrimSpace(res.Stderr + "\ncommand timed out after " + timeout.String())
@@ -212,8 +265,18 @@ func (c *Client) Run(ctx context.Context, argv []string, timeout time.Duration) 
 	return res, nil
 }
 
+// filesPath escapes each segment of a literal workspace path once, so a name
+// such as "a%2e" reaches the daemon as that name and not as ".".
+func filesPath(p string) string {
+	segs := strings.Split(p, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	return strings.Join(segs, "/")
+}
+
 func (c *Client) do(ctx context.Context, method, p string, query url.Values, body io.Reader, size int64) (*http.Response, error) {
-	u := c.rest.JoinPath("/v1/files/", p)
+	u := c.rest.JoinPath("/v1/files/", filesPath(p))
 	u.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
@@ -249,8 +312,10 @@ func (c *Client) Open(ctx context.Context, p string) (io.ReadCloser, error) {
 	return res.Body, nil
 }
 
+// List returns a directory's entries. The trailing slash matters: without it
+// the daemon answers with a redirect, which this client does not follow.
 func (c *Client) List(ctx context.Context, p string) ([]Entry, error) {
-	res, err := c.do(ctx, http.MethodGet, p, nil, nil, 0)
+	res, err := c.do(ctx, http.MethodGet, p+"/", nil, nil, 0)
 	if err != nil {
 		return nil, err
 	}

@@ -15,8 +15,10 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -26,11 +28,13 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/retry"
 	sandboxv1beta1 "sigs.k8s.io/agent-sandbox/api/v1beta1"
 	extensionsv1beta1 "sigs.k8s.io/agent-sandbox/extensions/api/v1beta1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/hatchet-dev/brickie/internal/driver"
+	"github.com/hatchet-dev/brickie/internal/driver/fsops"
 	"github.com/hatchet-dev/brickie/internal/engine"
 	"github.com/hatchet-dev/brickie/internal/sandboxd"
 )
@@ -39,7 +43,7 @@ const (
 	sandboxLabel       = "brickie.hatchet.run/sandbox"
 	lastUsedAnnotation = "brickie.hatchet.run/last-used"
 	userLabelPrefix    = "sandbox.users.io/"
-	markerFile         = ".brickie-sandbox"
+	markerFile         = fsops.Marker
 	tokenSecret        = "brickie-sandboxd"
 	gvisorRuntimeClass = "gvisor"
 	kataRuntimeClass   = "kata-clh"
@@ -57,6 +61,16 @@ type Options struct {
 	ReadyTimeout time.Duration
 	MaxFileBytes int64
 	Staging      driver.Staging
+
+	// ProviderNamespace holds the sandboxd token Secret and is where the
+	// provider pod, matched by ProviderSelector, is allowed to reach sandboxes.
+	ProviderNamespace string
+	ProviderSelector  map[string]string
+	// Egress is what sandboxes may reach: "internet" (public addresses and
+	// cluster DNS, never private ranges or the metadata endpoint) or "none".
+	Egress string
+	// CPU, Memory, and Disk bound each sandbox; Disk also caps the workspace.
+	CPU, Memory, Disk resource.Quantity
 }
 
 type Driver struct {
@@ -90,6 +104,28 @@ func New(opts Options) (*Driver, error) {
 	}
 	if opts.WarmReplicas <= 0 {
 		opts.WarmReplicas = 2
+	}
+	if opts.ProviderNamespace == "" {
+		if ns, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+			opts.ProviderNamespace = strings.TrimSpace(string(ns))
+		} else {
+			opts.ProviderNamespace = opts.Namespace
+		}
+	}
+	if len(opts.ProviderSelector) == 0 {
+		opts.ProviderSelector = map[string]string{"app.kubernetes.io/name": "brickie"}
+	}
+	switch opts.Egress {
+	case "":
+		opts.Egress = "internet"
+	case "internet", "none":
+	default:
+		return nil, fmt.Errorf("unknown sandbox egress %q (internet|none)", opts.Egress)
+	}
+	for q, def := range map[*resource.Quantity]string{&opts.CPU: "1", &opts.Memory: "2Gi", &opts.Disk: "10Gi"} {
+		if q.IsZero() {
+			*q = resource.MustParse(def)
+		}
 	}
 	restCfg, err := loadConfig()
 	if err != nil {
@@ -164,10 +200,12 @@ func (d *Driver) detectRuntime(ctx context.Context) error {
 	return nil
 }
 
-// ensureToken reads the sandboxd bearer token shared by every sandbox in the
-// namespace, creating it on first run. Pods only ever see its digest.
+// ensureToken reads the sandboxd bearer token shared by every sandbox this
+// provider runs, creating it on first run. It lives in the provider's own
+// namespace, never the sandbox namespace, and pods only ever see its digest.
 func (d *Driver) ensureToken(ctx context.Context) error {
-	secrets := d.clientset.CoreV1().Secrets(d.opts.Namespace)
+	ns := d.opts.ProviderNamespace
+	secrets := d.clientset.CoreV1().Secrets(ns)
 	s, err := secrets.Get(ctx, tokenSecret, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		token, tokenErr := sandboxd.NewToken()
@@ -175,7 +213,7 @@ func (d *Driver) ensureToken(ctx context.Context) error {
 			return tokenErr
 		}
 		s, err = secrets.Create(ctx, &corev1.Secret{
-			Name: tokenSecret, Namespace: d.opts.Namespace,
+			Name: tokenSecret, Namespace: ns,
 			StringData: map[string]string{"token": token},
 		}, metav1.CreateOptions{})
 		if apierrors.IsAlreadyExists(err) {
@@ -183,17 +221,49 @@ func (d *Driver) ensureToken(ctx context.Context) error {
 		}
 	}
 	if err != nil {
-		return fmt.Errorf("sandboxd token secret %s/%s: %w", d.opts.Namespace, tokenSecret, err)
+		return fmt.Errorf("sandboxd token secret %s/%s: %w", ns, tokenSecret, err)
 	}
 	d.token = string(s.Data["token"])
 	if d.token == "" {
-		return fmt.Errorf("sandboxd token secret %s/%s has no token key", d.opts.Namespace, tokenSecret)
+		return fmt.Errorf("sandboxd token secret %s/%s has no token key", ns, tokenSecret)
 	}
 	return nil
 }
 
+// networkPolicy is the template's managed policy: sandboxd reachable only
+// from the provider pod, and egress by the Egress option.
+func (d *Driver) networkPolicy() *extensionsv1beta1.NetworkPolicySpec {
+	tcp, udp := corev1.ProtocolTCP, corev1.ProtocolUDP
+	rest, grpc, dns := intstr.FromInt32(sandboxd.RESTPort), intstr.FromInt32(sandboxd.GRPCPort), intstr.FromInt32(53)
+	np := &extensionsv1beta1.NetworkPolicySpec{
+		Ingress: []networkingv1.NetworkPolicyIngressRule{{
+			From: []networkingv1.NetworkPolicyPeer{{
+				NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": d.opts.ProviderNamespace}},
+				PodSelector:       &metav1.LabelSelector{MatchLabels: d.opts.ProviderSelector},
+			}},
+			Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &rest}, {Protocol: &tcp, Port: &grpc}},
+		}},
+	}
+	if d.opts.Egress == "internet" {
+		np.Egress = []networkingv1.NetworkPolicyEgressRule{
+			{
+				To:    []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{}, PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"k8s-app": "kube-dns"}}}},
+				Ports: []networkingv1.NetworkPolicyPort{{Protocol: &udp, Port: &dns}, {Protocol: &tcp, Port: &dns}},
+			},
+			{
+				To: []networkingv1.NetworkPolicyPeer{
+					{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"}}},
+					{IPBlock: &networkingv1.IPBlock{CIDR: "::/0", Except: []string{"fc00::/7", "fe80::/10"}}},
+				},
+			},
+		}
+	}
+	return np
+}
+
 func (d *Driver) podSpec(image string) corev1.PodSpec {
 	no := false
+	disk := d.opts.Disk
 	spec := corev1.PodSpec{
 		AutomountServiceAccountToken: &no,
 		SecurityContext:              &corev1.PodSecurityContext{SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
@@ -217,6 +287,11 @@ func (d *Driver) podSpec(image string) corev1.PodSpec {
 				PeriodSeconds: 2,
 			},
 			SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: &no},
+			Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
+				corev1.ResourceCPU:              d.opts.CPU,
+				corev1.ResourceMemory:           d.opts.Memory,
+				corev1.ResourceEphemeralStorage: d.opts.Disk,
+			}},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "brickie", MountPath: "/brickie", ReadOnly: true},
 				{Name: "workspace", MountPath: sandboxd.Workspace},
@@ -224,7 +299,7 @@ func (d *Driver) podSpec(image string) corev1.PodSpec {
 		}},
 		Volumes: []corev1.Volume{
 			{Name: "brickie", EmptyDir: &corev1.EmptyDirVolumeSource{}},
-			{Name: "workspace", EmptyDir: &corev1.EmptyDirVolumeSource{}},
+			{Name: "workspace", EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &disk}},
 		},
 	}
 	if d.runtimeClass != "" {
@@ -251,7 +326,8 @@ func (d *Driver) ensurePool(ctx context.Context, image string) (string, error) {
 		Name: name, Namespace: d.opts.Namespace,
 		Spec: extensionsv1beta1.SandboxTemplateSpec{
 			SandboxBlueprint:        sandboxv1beta1.SandboxBlueprint{PodTemplate: sandboxv1beta1.PodTemplate{Spec: d.podSpec(image)}},
-			NetworkPolicyManagement: extensionsv1beta1.NetworkPolicyManagementUnmanaged,
+			NetworkPolicyManagement: extensionsv1beta1.NetworkPolicyManagementManaged,
+			NetworkPolicy:           d.networkPolicy(),
 		},
 	}
 	replicas := int32(min(d.opts.WarmReplicas, 1000)) // #nosec G115 -- bounded above
@@ -283,12 +359,14 @@ func (d *Driver) upsert(ctx context.Context, obj ctrlclient.Object, update func(
 	if !apierrors.IsAlreadyExists(err) {
 		return err
 	}
-	existing := obj.DeepCopyObject().(ctrlclient.Object)
-	if err := d.client.Get(ctx, ctrlclient.ObjectKeyFromObject(obj), existing); err != nil {
-		return err
-	}
-	update(existing)
-	return d.client.Update(ctx, existing)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		existing := obj.DeepCopyObject().(ctrlclient.Object)
+		if err := d.client.Get(ctx, ctrlclient.ObjectKeyFromObject(obj), existing); err != nil {
+			return err
+		}
+		update(existing)
+		return d.client.Update(ctx, existing)
+	})
 }
 
 func userLabels(metadata map[string]string) map[string]string {
