@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import '@hatchet/sandbox';
+import '@hatchet-dev/sandbox';
 import { initClient } from './client.js';
 
 const opts = process.env.DEMO_TEMPLATE ? { template: process.env.DEMO_TEMPLATE } : {};
