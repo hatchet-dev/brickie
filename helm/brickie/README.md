@@ -16,7 +16,7 @@ No external chart repositories are needed. All subcharts are vendored under `cha
 helm upgrade --install brickie ./helm/brickie \
   --namespace brickie --create-namespace \
   --set hatchet.token=$HATCHET_CLIENT_TOKEN \
-  --set store=s3://my-bucket/brickie \
+  --set store='s3://my-bucket?prefix=brickie/' \
   --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::123456789012:role/brickie-provider
 ```
 
@@ -45,7 +45,7 @@ If your cluster already provides a runtime class, disable both installers and se
 
 Sandbox snapshots, sandbox metadata, and files larger than 2 MiB go to a bucket. Without one the provider keeps them on its pod's emptyDir: snapshots are lost on restart, `connect` cannot resume a sandbox, and files over 2 MiB fail because your application cannot reach the pod's disk. Development only.
 
-- Create a bucket. Set `store` to `s3://bucket/prefix`. S3-compatible stores: `s3://bucket?endpoint=https://host&use_path_style=true&region=us-east-1`.
+- Create a bucket. Set `store` to `s3://bucket?prefix=brickie/`. The prefix is a query parameter; a path in the URL is ignored. S3-compatible stores: `s3://bucket?endpoint=https://host&use_path_style=true&region=us-east-1&prefix=brickie/`.
 - Give the provider access. On EKS, create an IAM role with this policy and annotate the ServiceAccount with its ARN through `serviceAccount.annotations` (IRSA). The role needs the `sts:AssumeRoleWithWebIdentity` trust for the cluster's OIDC provider and the ServiceAccount `system:serviceaccount:<namespace>:brickie-brickie`.
 
 ```json

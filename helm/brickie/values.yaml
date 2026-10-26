@@ -3,7 +3,7 @@
 # Minimum install:
 #   helm upgrade --install brickie ./helm/brickie -n brickie --create-namespace \
 #     --set hatchet.token=$HATCHET_CLIENT_TOKEN \
-#     --set store=s3://my-bucket/brickie
+#     --set store='s3://my-bucket?prefix=brickie/'
 #
 # Everything the provider needs is bundled: the agent-sandbox controller, the
 # Kata Containers runtime (default), an optional gVisor installer, and a
@@ -80,10 +80,12 @@ sandbox:
 # sandbox.maxFileBytes. Empty keeps everything on the pod's emptyDir, which is
 # lost on restart, and files over maxFileBytes then fail because your
 # application cannot reach the pod's disk. Development only.
-#   s3://bucket/prefix?region=us-east-1
-#   gs://bucket/prefix
-#   azblob://container/prefix
-#   s3://bucket/prefix?endpoint=https://host&use_path_style=true   (S3-compatible)
+#   s3://bucket?region=us-east-1&prefix=brickie/
+#   gs://bucket?prefix=brickie/
+#   azblob://container?prefix=brickie/
+#   s3://bucket?endpoint=https://host&use_path_style=true&prefix=brickie/   (S3-compatible)
+# A prefix is a query parameter, never a path: the path part of the URL is
+# ignored by every backend.
 # Credentials come from the pod identity (IRSA, workload identity) or from
 # storeSecret, a Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY or the
 # GCP and Azure equivalents.

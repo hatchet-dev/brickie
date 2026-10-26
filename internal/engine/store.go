@@ -45,6 +45,9 @@ func DefaultStoreURL() string {
 // one machine, where the SDK and the provider share the directory.
 func OpenStore(ctx context.Context, rawURL string) (*Store, error) {
 	s := &Store{}
+	if u, err := url.Parse(rawURL); err == nil && u.Scheme != "file" && strings.Trim(u.Path, "/") != "" {
+		return nil, fmt.Errorf("open store %q: a prefix goes in the query, not the path: %s://%s?prefix=%s/", rawURL, u.Scheme, u.Host, strings.Trim(u.Path, "/"))
+	}
 	if u, err := url.Parse(rawURL); err == nil && u.Scheme == "file" {
 		s.dir = u.Path
 		if err := os.MkdirAll(s.dir, 0o700); err != nil {
@@ -150,7 +153,7 @@ func (s *Store) Presign(ctx context.Context, key string) (putURL, getURL string,
 		u := "file://" + filepath.Join(s.dir, key)
 		return u, u, nil
 	}
-	putURL, err = s.bucket.SignedURL(ctx, key, &blob.SignedURLOptions{Method: "PUT", Expiry: stagingURLExpiry, ContentType: "application/octet-stream"})
+	putURL, err = s.bucket.SignedURL(ctx, key, &blob.SignedURLOptions{Method: "PUT", Expiry: stagingURLExpiry})
 	if err != nil {
 		return "", "", err
 	}

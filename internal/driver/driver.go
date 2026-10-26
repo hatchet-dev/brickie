@@ -97,7 +97,7 @@ func Run(ctx context.Context, c *sandboxd.Client, req engine.TurnRequest, fresh 
 		return engine.TurnResponse{Output: outJSON, Timings: timings}, nil
 	}
 	start = time.Now()
-	res, err := c.Run(ctx, []string{"tar", "-czf", "-", "."}, 0)
+	res, err := c.Run(ctx, []string{"tar", "-czf", "-", "--exclude=./" + fsops.Marker, "."}, 0)
 	if err != nil {
 		return engine.TurnResponse{}, fmt.Errorf("snapshot workspace: %w", err)
 	}

@@ -26,11 +26,13 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/retry"
 	sandboxv1beta1 "sigs.k8s.io/agent-sandbox/api/v1beta1"
 	extensionsv1beta1 "sigs.k8s.io/agent-sandbox/extensions/api/v1beta1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/hatchet-dev/brickie/internal/driver"
+	"github.com/hatchet-dev/brickie/internal/driver/fsops"
 	"github.com/hatchet-dev/brickie/internal/engine"
 	"github.com/hatchet-dev/brickie/internal/sandboxd"
 )
@@ -39,7 +41,7 @@ const (
 	sandboxLabel       = "brickie.hatchet.run/sandbox"
 	lastUsedAnnotation = "brickie.hatchet.run/last-used"
 	userLabelPrefix    = "sandbox.users.io/"
-	markerFile         = ".brickie-sandbox"
+	markerFile         = fsops.Marker
 	tokenSecret        = "brickie-sandboxd"
 	gvisorRuntimeClass = "gvisor"
 	kataRuntimeClass   = "kata-clh"
@@ -283,12 +285,14 @@ func (d *Driver) upsert(ctx context.Context, obj ctrlclient.Object, update func(
 	if !apierrors.IsAlreadyExists(err) {
 		return err
 	}
-	existing := obj.DeepCopyObject().(ctrlclient.Object)
-	if err := d.client.Get(ctx, ctrlclient.ObjectKeyFromObject(obj), existing); err != nil {
-		return err
-	}
-	update(existing)
-	return d.client.Update(ctx, existing)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		existing := obj.DeepCopyObject().(ctrlclient.Object)
+		if err := d.client.Get(ctx, ctrlclient.ObjectKeyFromObject(obj), existing); err != nil {
+			return err
+		}
+		update(existing)
+		return d.client.Update(ctx, existing)
+	})
 }
 
 func userLabels(metadata map[string]string) map[string]string {

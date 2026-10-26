@@ -68,7 +68,7 @@ The Helm chart in `helm/brickie` installs the provider and everything it needs: 
 ```bash
 helm upgrade --install brickie ./helm/brickie --namespace brickie --create-namespace \
   --set hatchet.token=$HATCHET_CLIENT_TOKEN \
-  --set store=s3://my-bucket/brickie
+  --set store='s3://my-bucket?prefix=brickie/'
 ```
 
 What to set up first (nodes with KVM, a bucket and its IAM role, a CNI that enforces NetworkPolicy, a Hatchet tenant with gRPC operators) is in [helm/brickie/README.md](helm/brickie/README.md).

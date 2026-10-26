@@ -28,6 +28,10 @@ const Prefix = "$fs."
 // DefaultMaxFileBytes bounds one read or write unless the provider sets its own limit.
 const DefaultMaxFileBytes = 2 << 20
 
+// Marker is the file a driver may keep in the workspace root to recognise a
+// pod it has already bound; listings and snapshots leave it out.
+const Marker = ".brickie-sandbox"
+
 // Staging carries files larger than the limit between the SDK and the
 // workspace through the object store.
 type Staging interface {
@@ -126,6 +130,9 @@ func listDir(ctx context.Context, c *sandboxd.Client, dir string, depth int) ([]
 	}
 	entries := []fsEntry{}
 	for _, r := range raw {
+		if dir == "." && r.Name == Marker {
+			continue
+		}
 		e := toEntry(dir, r)
 		entries = append(entries, e)
 		if e.Type == "dir" && depth > 1 {
