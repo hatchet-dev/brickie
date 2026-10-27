@@ -15,7 +15,7 @@ func main() {
 		Use:   "brickie",
 		Short: "Agent sandboxes as durable tasks.",
 	}
-	root.AddCommand(workerCmd(), versionCmd())
+	root.AddCommand(workerCmd(), sandboxTLSCmd(), versionCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}

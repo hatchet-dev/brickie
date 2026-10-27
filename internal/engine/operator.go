@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,11 +15,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const teardownTimeout = 30 * time.Second
-
-func operatorActionID() string {
-	return strings.ToLower(TaskName + ":" + TaskName)
-}
+const (
+	teardownTimeout = 30 * time.Second
+	actionID        = TaskName + ":" + TaskName
+)
 
 type operatorProvider struct {
 	runner   *turnRunner
@@ -57,7 +55,7 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 		Name:     "brickie-provider",
 	}, operator.OpenOpts{
 		Handler:    provider,
-		Actions:    []string{operatorActionID()},
+		Actions:    []string{actionID},
 		SlotConfig: map[string]int32{"default": int32(min(slots, 10000))}, // #nosec G115 -- bounded above
 	})
 	if err != nil {
@@ -70,9 +68,9 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 		Name: TaskName,
 		Tasks: []*operatorclient.CreateTaskOpts{{
 			ReadableId: TaskName,
-			Action:     operatorActionID(),
+			Action:     actionID,
 			Timeout:    turnExecutionTimeout.String(),
-			Retries:    int32(min(runner.retries, 100)), // #nosec G115 -- bounded above
+			Retries:    turnRetries,
 		}},
 	}
 	actions, err := session.PutWorkflow(ctx, workflow)
@@ -105,7 +103,7 @@ func (p *operatorProvider) HandleAction(_ context.Context, action *operatorclien
 	switch action.ActionType {
 	case operatorclient.ActionTypeStartStepRun:
 		p.wg.Add(1)
-		go p.execute(action) // #nosec G118 -- the action outlives this callback; execute derives its own cancellable context
+		go p.execute(action) // #nosec G118 -- a turn outlives the handler callback; execute scopes its own context
 	case operatorclient.ActionTypeCancelStepRun:
 		p.cancel(action.TaskRunExternalId)
 	}

@@ -86,7 +86,6 @@ fi
 
 if [ -f .env ] && grep -q HATCHET_CLIENT_TOKEN .env; then
   ok "hatchet token is in .env"
-  grep -q BRICKIE_OBJECT_STORE .env || echo "BRICKIE_OBJECT_STORE=file://$STATE_DIR/staging" >> .env
 else
   confirm "your programs and the sandbox provider authenticate to Hatchet with a token; we mint one and store it only in .env (mode 0600, git-ignored)" \
     "docker compose exec hatchet ./hatchet-admin token create ... >> .env"
@@ -95,7 +94,6 @@ else
   {
     echo "HATCHET_CLIENT_TOKEN=$TOKEN"
     echo "HATCHET_CLIENT_TLS_STRATEGY=none"
-    echo "BRICKIE_OBJECT_STORE=file://$STATE_DIR/staging"
   } >> .env
   umask 022
 fi
@@ -105,12 +103,12 @@ if [ -x bin/brickie ] && [ -z "$(find cmd internal go.mod go.sum -newer bin/bric
   ok "sandbox provider binary is up to date"
 else
   confirm "the sandbox provider is a Go program, but you don't need Go — we compile it inside a golang container" \
-    "docker run --rm -v \$PWD:/src golang:1.27 go build -o bin/brickie ./cmd/brickie"
+    "docker run --rm -v \$PWD:/src golang:1.27.3 go build -o bin/brickie ./cmd/brickie"
   docker run --rm -v "$PWD:/src" -w /src \
     -v brickie_go_cache:/go/pkg/mod -v brickie_go_build:/root/.cache/go-build \
     -e CGO_ENABLED=0 -e GOFIPS140=v1.0.0 -e GOOS="$(uname -s | tr '[:upper:]' '[:lower:]')" \
     -e GOARCH="$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')" \
-    golang:1.27 go build -o bin/brickie ./cmd/brickie
+    golang:1.27.3 go build -o bin/brickie ./cmd/brickie
   REBUILT=1
 fi
 
@@ -180,7 +178,7 @@ cat <<EOF
     dashboard   ${EXTERNAL_HATCHET:+your hatchet instance}${EXTERNAL_HATCHET:-http://localhost:8888  (admin@example.com / Admin123!!)}
     provider    tail -f $LOG_FILE   (stop: kill \$(cat $PID_FILE))
     token       .env (HATCHET_CLIENT_TOKEN, mode 0600)
-    staging     $STATE_DIR/staging (files over 2 MiB bypass Hatchet through it)
+    store       $STATE_DIR/store (snapshots; files over 2 MiB bypass Hatchet through it)
     sandboxes   Docker containers (alpine:3) on the local engine
                 no host env vars are injected
 

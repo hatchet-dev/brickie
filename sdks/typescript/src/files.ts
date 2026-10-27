@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import type { JsonObject } from '@hatchet-dev/typescript-sdk/v1';
 
-export type FileType = 'file' | 'dir' | 'symlink';
+export type FileType = 'file' | 'dir';
 
 export interface EntryInfo {
   name: string;
@@ -11,7 +11,6 @@ export interface EntryInfo {
   mode: number;
   permissions: string;
   modifiedTime?: Date;
-  symlinkTarget?: string;
 }
 
 export type FileData = string | ArrayBuffer | Uint8Array | Blob;
@@ -99,10 +98,7 @@ async function putStaged(url: string, bytes: Buffer): Promise<void> {
 
 async function getStaged(url: string): Promise<Buffer> {
   if (url.startsWith('file://')) {
-    const path = decodeURIComponent(url.slice('file://'.length));
-    const bytes = await fs.readFile(path);
-    await fs.rm(path, { force: true });
-    return bytes;
+    return fs.readFile(decodeURIComponent(url.slice('file://'.length)));
   }
   const res = await fetch(url);
   if (!res.ok) throw new FilesystemError('staging_failed', `stage download failed: HTTP ${res.status}`);
@@ -119,19 +115,30 @@ export class Files {
     return out;
   }
 
-  /** Reads a file as text (default), bytes, or a Blob. Files over the provider's `--max-file-bytes` (2 MiB) come through the provider's object store instead of Hatchet. */
+  /** Reads a file as text (default), bytes, or a Blob. Files over the provider's `--max-file-bytes` (2 MiB) come through the provider's `--store` instead of Hatchet. */
   read(path: string, opts?: ReadOpts & { format?: 'text' }): Promise<string>;
   read(path: string, opts: ReadOpts & { format: 'bytes' }): Promise<Uint8Array>;
   read(path: string, opts: ReadOpts & { format: 'blob' }): Promise<Blob>;
   async read(path: string, opts: ReadOpts = {}): Promise<string | Uint8Array | Blob> {
     const out = await this.call('read', { path });
-    const bytes = out.url ? await getStaged(out.url) : Buffer.from(out.content ?? '', 'base64');
+    const bytes = out.url ? await this.readStaged(out.url, out.stagedKey!) : Buffer.from(out.content ?? '', 'base64');
     if (opts.format === 'bytes') return new Uint8Array(bytes);
     if (opts.format === 'blob') return new Blob([new Uint8Array(bytes)]);
     return bytes.toString('utf8');
   }
 
-  /** Writes one file or several. Parent directories are created. Bytes are stored exactly. Files over 2 MiB go through the provider's object store instead of Hatchet. */
+  /** A replayed durable read may hold a URL that has expired; the provider signs the same staged file again. */
+  private async readStaged(url: string, stagedKey: string): Promise<Buffer> {
+    try {
+      return await getStaged(url);
+    } catch (e) {
+      if (url.startsWith('file://') || !(e instanceof FilesystemError)) throw e;
+      const { getUrl } = await this.call('presign', { stagedKey });
+      return getStaged(getUrl!);
+    }
+  }
+
+  /** Writes one file or several. Parent directories are created. Bytes are stored exactly. Files over 2 MiB go through the provider's `--store` instead of Hatchet. */
   write(path: string, data: FileData): Promise<EntryInfo>;
   write(files: WriteEntry[]): Promise<EntryInfo[]>;
   async write(pathOrFiles: string | WriteEntry[], data?: FileData): Promise<EntryInfo | EntryInfo[]> {

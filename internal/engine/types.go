@@ -1,9 +1,11 @@
+// Package engine defines the sandbox turn contract and the provider that runs it.
 package engine
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -38,15 +40,21 @@ type TurnResult struct {
 	Timings    map[string]int64 `json:"timings,omitempty"`
 }
 
+// TurnRequest carries one turn to a driver. Snapshot, when set, is the
+// workspace tar to restore into a fresh sandbox; Checkpoint receives the tar
+// of the workspace after a mutating turn, streamed as it is produced.
 type TurnRequest struct {
+	SandboxID    string
 	SandboxName  string
 	Image        string
 	Fn           string
 	Input        json.RawMessage
-	SnapshotTar  []byte
+	Snapshot     io.Reader
+	SnapshotSize int64
 	SnapshotID   string
-	CheckpointID string
+	Checkpoint   io.Writer
 	IdleTTL      time.Duration
+	Metadata     map[string]string
 	Log          func(message string)
 }
 
@@ -58,25 +66,15 @@ func (r TurnRequest) Logf(format string, args ...any) {
 
 type TurnResponse struct {
 	Output      json.RawMessage
-	SnapshotTar []byte
+	Snapshotted bool
 	Timings     map[string]int64
 }
 
+// Driver runs turns and reports the sandboxes it has running with the time
+// each last ran a turn.
 type Driver interface {
 	RunTurn(ctx context.Context, req TurnRequest) (TurnResponse, error)
-}
-
-// SnapshotNativeDriver marks drivers that restore and checkpoint snapshots
-// themselves (overlayfs chains through the CSI node). The provider then passes
-// snapshot ids instead of tar bytes and skips its own store entirely.
-type SnapshotNativeDriver interface {
-	SnapshotNative() bool
-}
-
-// LiveLister reports the sandboxes a driver currently has running and when
-// each last ran a turn.
-type LiveLister interface {
-	Live() map[string]time.Time
+	Live(ctx context.Context) map[string]time.Time
 }
 
 // SandboxMeta is what a sandbox was created with, kept for connect and list.
