@@ -24,6 +24,11 @@ jobs:
             echo "::error::${GITHUB_REF_NAME} is a lightweight tag; releases are built from annotated tags only (git tag -a)"
             exit 1
           fi
+          chart=$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' helm/brickie/Chart.yaml)
+          if [ "$chart" != "${GITHUB_REF_NAME#v}" ]; then
+            echo "::error::helm/brickie/Chart.yaml appVersion is ${chart} but the tag is ${GITHUB_REF_NAME#v}; the chart must point at the image this release publishes"
+            exit 1
+          fi
       - name: Release notes from CHANGELOG.md
         run: hack/changelog-notes.sh CHANGELOG.md "${GITHUB_REF_NAME#v}" > "${RUNNER_TEMP}/notes.md"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

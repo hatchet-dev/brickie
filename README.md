@@ -72,6 +72,18 @@ HATCHET_CLIENT_TOKEN=... ./brickie worker
 
 Release binaries are built with the CMVP-certified Go Cryptographic Module and run in FIPS 140-3 mode; `brickie version` shows it. Snapshots, sandbox metadata, and files over 2 MiB live in `--store`: a bucket, or on one machine a `file://` directory the SDK can also reach, `~/.brickie/store` by default. Flags and their `BRICKIE_*` environment variables are listed by `brickie worker --help`. This mode runs sandboxes as plain containers on the local engine, for development and single-tenant use; untrusted agents belong on the Kubernetes driver, which runs from the container image `ghcr.io/hatchet-dev/brickie`, published with every release.
 
+## Run on Kubernetes
+
+The Helm chart in `helm/brickie` installs the provider and everything it needs: agent-sandbox for sandbox pods and warm pools, Kata Containers (the default runtime, one micro-VM per sandbox), and the sandbox NetworkPolicy. All subcharts are bundled.
+
+```bash
+helm upgrade --install brickie ./helm/brickie --namespace brickie --create-namespace \
+  --set hatchet.token=$HATCHET_CLIENT_TOKEN \
+  --set store=s3://my-bucket?prefix=brickie/
+```
+
+What to set up first (nodes with KVM, a bucket and its IAM role, a CNI that enforces NetworkPolicy, a Hatchet tenant with gRPC operators) is in [helm/brickie/README.md](helm/brickie/README.md).
+
 ## Use an external Hatchet instance
 
 1. Get a token from the tenant. The tenant needs gRPC operators enabled and Hatchet v0.110.0 or newer.
