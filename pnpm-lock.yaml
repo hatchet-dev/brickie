@@ -8,12 +8,12 @@ importers:
 
   examples/typescript:
     dependencies:
+      '@hatchet-dev/sandbox':
+        specifier: workspace:*
+        version: link:../../sdks/typescript
       '@hatchet-dev/typescript-sdk':
         specifier: ^1.33.1
         version: 1.33.1(@grpc/grpc-js@1.14.5)(@opentelemetry/api@1.9.1)(@opentelemetry/core@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-grpc@0.221.0(@opentelemetry/api@1.9.1))(@opentelemetry/instrumentation@0.221.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.11.0(@opentelemetry/api@1.9.1))(zod@4.6.5)
-      '@hatchet/sandbox':
-        specifier: workspace:*
-        version: link:../../sdks/typescript
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

@@ -1,10 +1,14 @@
 // Package kubernetes runs sandboxes as agent-sandbox claims: one warm pool per
-// image, one claim and pod per sandbox, sandboxd reached over the pod IP.
+// image, one claim and pod per sandbox, sandboxd reached over the pod IP
+// through the mutual-TLS proxy that runs beside it.
 package kubernetes
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -37,6 +41,7 @@ import (
 	"github.com/hatchet-dev/brickie/internal/driver/fsops"
 	"github.com/hatchet-dev/brickie/internal/engine"
 	"github.com/hatchet-dev/brickie/internal/sandboxd"
+	"github.com/hatchet-dev/brickie/internal/sandboxtls"
 )
 
 const (
@@ -45,6 +50,8 @@ const (
 	userLabelPrefix    = "sandbox.users.io/"
 	markerFile         = fsops.Marker
 	tokenSecret        = "brickie-sandboxd"
+	tlsSecret          = "brickie-sandbox-tls"
+	tlsDir             = "/etc/brickie/tls"
 	gvisorRuntimeClass = "gvisor"
 	kataRuntimeClass   = "kata-clh"
 )
@@ -62,10 +69,13 @@ type Options struct {
 	MaxFileBytes int64
 	Staging      driver.Staging
 
-	// ProviderNamespace holds the sandboxd token Secret and is where the
-	// provider pod, matched by ProviderSelector, is allowed to reach sandboxes.
+	// ProviderNamespace holds the sandboxd token and CA Secret and is where
+	// the provider pod, matched by ProviderSelector, is allowed to reach
+	// sandboxes. ProviderImage is this provider's own image, which runs in
+	// every sandbox pod as the TLS proxy in front of sandboxd.
 	ProviderNamespace string
 	ProviderSelector  map[string]string
+	ProviderImage     string
 	// Egress is what sandboxes may reach: "internet" (public addresses and
 	// cluster DNS, never private ranges or the metadata endpoint) or "none".
 	Egress string
@@ -79,6 +89,8 @@ type Driver struct {
 	clientset    *kubernetes.Clientset
 	runtimeClass string
 	token        string
+	ca           *sandboxtls.CA
+	tls          *tls.Config
 
 	poolMu sync.Mutex
 	pools  map[string]string
@@ -114,6 +126,9 @@ func New(opts Options) (*Driver, error) {
 	}
 	if len(opts.ProviderSelector) == 0 {
 		opts.ProviderSelector = map[string]string{"app.kubernetes.io/name": "brickie"}
+	}
+	if opts.ProviderImage == "" {
+		return nil, fmt.Errorf("the kubernetes driver needs --provider-image: the image this provider runs from, for the TLS proxy in every sandbox pod")
 	}
 	switch opts.Egress {
 	case "":
@@ -151,12 +166,24 @@ func New(opts Options) (*Driver, error) {
 	if err := d.detectRuntime(ctx); err != nil {
 		return nil, err
 	}
-	if err := d.ensureToken(ctx); err != nil {
+	if err := d.ensureCredentials(ctx); err != nil {
+		return nil, err
+	}
+	if err := d.ensureServerCert(ctx); err != nil {
 		return nil, err
 	}
 	if _, err := d.ensurePool(ctx, opts.Image); err != nil {
 		return nil, err
 	}
+	go func() {
+		for range time.Tick(time.Hour) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if err := d.ensureServerCert(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "brickie: renew sandbox tls secret: %v\n", err)
+			}
+			cancel()
+		}
+	}()
 	return d, nil
 }
 
@@ -200,41 +227,101 @@ func (d *Driver) detectRuntime(ctx context.Context) error {
 	return nil
 }
 
-// ensureToken reads the sandboxd bearer token shared by every sandbox this
-// provider runs, creating it on first run. It lives in the provider's own
-// namespace, never the sandbox namespace, and pods only ever see its digest.
-func (d *Driver) ensureToken(ctx context.Context) error {
+// ensureCredentials reads the Secret in the provider's own namespace that
+// holds the sandboxd bearer token and the CA behind every sandbox's TLS,
+// creating whichever is missing. Sandbox pods only ever see the token's
+// digest and the CA certificate.
+func (d *Driver) ensureCredentials(ctx context.Context) error {
 	ns := d.opts.ProviderNamespace
 	secrets := d.clientset.CoreV1().Secrets(ns)
-	s, err := secrets.Get(ctx, tokenSecret, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		token, tokenErr := sandboxd.NewToken()
-		if tokenErr != nil {
-			return tokenErr
+	var s *corev1.Secret
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var err error
+		s, err = secrets.Get(ctx, tokenSecret, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			s, err = secrets.Create(ctx, &corev1.Secret{Name: tokenSecret, Namespace: ns}, metav1.CreateOptions{})
+			if apierrors.IsAlreadyExists(err) {
+				s, err = secrets.Get(ctx, tokenSecret, metav1.GetOptions{})
+			}
 		}
-		s, err = secrets.Create(ctx, &corev1.Secret{
-			Name: tokenSecret, Namespace: ns,
-			StringData: map[string]string{"token": token},
-		}, metav1.CreateOptions{})
-		if apierrors.IsAlreadyExists(err) {
-			s, err = secrets.Get(ctx, tokenSecret, metav1.GetOptions{})
+		if err != nil {
+			return err
 		}
-	}
+		if s.Data == nil {
+			s.Data = map[string][]byte{}
+		}
+		changed := false
+		if len(s.Data["token"]) == 0 {
+			token, err := sandboxd.NewToken()
+			if err != nil {
+				return err
+			}
+			s.Data["token"] = []byte(token)
+			changed = true
+		}
+		if len(s.Data["ca.crt"]) == 0 || len(s.Data["ca.key"]) == 0 {
+			ca, err := sandboxtls.NewCA()
+			if err != nil {
+				return err
+			}
+			s.Data["ca.crt"], s.Data["ca.key"] = ca.CertPEM, ca.KeyPEM
+			changed = true
+		}
+		if !changed {
+			return nil
+		}
+		s, err = secrets.Update(ctx, s, metav1.UpdateOptions{})
+		return err
+	})
 	if err != nil {
-		return fmt.Errorf("sandboxd token secret %s/%s: %w", ns, tokenSecret, err)
+		return fmt.Errorf("sandboxd secret %s/%s: %w", ns, tokenSecret, err)
 	}
 	d.token = string(s.Data["token"])
-	if d.token == "" {
-		return fmt.Errorf("sandboxd token secret %s/%s has no token key", ns, tokenSecret)
+	if d.ca, err = sandboxtls.LoadCA(s.Data["ca.crt"], s.Data["ca.key"]); err != nil {
+		return fmt.Errorf("sandboxd secret %s/%s: %w", ns, tokenSecret, err)
+	}
+	d.tls = d.ca.ClientConfig()
+	return nil
+}
+
+// ensureServerCert keeps the Secret the proxies mount in the sandbox
+// namespace: the CA certificate and a server certificate, reissued a week
+// before it expires or when the CA changed.
+func (d *Driver) ensureServerCert(ctx context.Context) error {
+	ns := d.opts.Namespace
+	secrets := d.clientset.CoreV1().Secrets(ns)
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		s, err := secrets.Get(ctx, tlsSecret, metav1.GetOptions{})
+		if err == nil && bytes.Equal(s.Data[sandboxtls.CAFile], d.ca.CertPEM) && d.ca.Fresh(s.Data[sandboxtls.CertFile]) {
+			return nil
+		}
+		if err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		certPEM, keyPEM, issueErr := d.ca.Issue(x509.ExtKeyUsageServerAuth)
+		if issueErr != nil {
+			return issueErr
+		}
+		data := map[string][]byte{sandboxtls.CAFile: d.ca.CertPEM, sandboxtls.CertFile: certPEM, sandboxtls.KeyFile: keyPEM}
+		if apierrors.IsNotFound(err) {
+			_, err = secrets.Create(ctx, &corev1.Secret{Name: tlsSecret, Namespace: ns, Data: data}, metav1.CreateOptions{})
+			return err
+		}
+		s.Data = data
+		_, err = secrets.Update(ctx, s, metav1.UpdateOptions{})
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("sandbox tls secret %s/%s: %w", ns, tlsSecret, err)
 	}
 	return nil
 }
 
-// networkPolicy is the template's managed policy: sandboxd reachable only
-// from the provider pod, and egress by the Egress option.
+// networkPolicy is the template's managed policy: the sandbox's TLS ports
+// reachable only from the provider pod, and egress by the Egress option.
 func (d *Driver) networkPolicy() *extensionsv1beta1.NetworkPolicySpec {
 	tcp, udp := corev1.ProtocolTCP, corev1.ProtocolUDP
-	rest, grpc, dns := intstr.FromInt32(sandboxd.RESTPort), intstr.FromInt32(sandboxd.GRPCPort), intstr.FromInt32(53)
+	rest, grpc, dns := intstr.FromInt32(sandboxtls.RESTPort), intstr.FromInt32(sandboxtls.GRPCPort), intstr.FromInt32(53)
 	np := &extensionsv1beta1.NetworkPolicySpec{
 		Ingress: []networkingv1.NetworkPolicyIngressRule{{
 			From: []networkingv1.NetworkPolicyPeer{{
@@ -261,8 +348,11 @@ func (d *Driver) networkPolicy() *extensionsv1beta1.NetworkPolicySpec {
 	return np
 }
 
+// podSpec is the sandbox pod: sandboxd on loopback only in the sandbox
+// container, and the provider's own image beside it terminating mutual TLS on
+// the pod IP. The certificate Secret is mounted into the proxy alone.
 func (d *Driver) podSpec(image string) corev1.PodSpec {
-	no := false
+	no, yes := false, true
 	disk := d.opts.Disk
 	spec := corev1.PodSpec{
 		AutomountServiceAccountToken: &no,
@@ -273,33 +363,53 @@ func (d *Driver) podSpec(image string) corev1.PodSpec {
 			Command:      []string{"/bin/sh", "-c", "cp " + sandboxd.ImageBinary + " /brickie/sandboxd"},
 			VolumeMounts: []corev1.VolumeMount{{Name: "brickie", MountPath: "/brickie"}},
 		}},
-		Containers: []corev1.Container{{
-			Name:       "sandbox",
-			Image:      image,
-			Command:    append([]string{"/brickie/sandboxd"}, sandboxd.Args(d.token)...),
-			WorkingDir: sandboxd.Workspace,
-			Ports: []corev1.ContainerPort{
-				{Name: "rest", ContainerPort: sandboxd.RESTPort},
-				{Name: "grpc", ContainerPort: sandboxd.GRPCPort},
+		Containers: []corev1.Container{
+			{
+				Name:            "sandbox",
+				Image:           image,
+				Command:         append([]string{"/brickie/sandboxd"}, sandboxd.Args(d.token, "127.0.0.1")...),
+				WorkingDir:      sandboxd.Workspace,
+				SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: &no},
+				Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
+					corev1.ResourceCPU:              d.opts.CPU,
+					corev1.ResourceMemory:           d.opts.Memory,
+					corev1.ResourceEphemeralStorage: d.opts.Disk,
+				}},
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: "brickie", MountPath: "/brickie", ReadOnly: true},
+					{Name: "workspace", MountPath: sandboxd.Workspace},
+				},
 			},
-			ReadinessProbe: &corev1.Probe{
-				HTTPGet:       &corev1.HTTPGetAction{Path: "/v1/health", Port: intstr.FromInt32(sandboxd.RESTPort)},
-				PeriodSeconds: 2,
+			{
+				Name:  "tls",
+				Image: d.opts.ProviderImage,
+				Args:  []string{"sandbox-tls", "--dir", tlsDir},
+				Ports: []corev1.ContainerPort{
+					{Name: "rest", ContainerPort: sandboxtls.RESTPort},
+					{Name: "grpc", ContainerPort: sandboxtls.GRPCPort},
+					{Name: "health", ContainerPort: sandboxtls.HealthPort},
+				},
+				ReadinessProbe: &corev1.Probe{
+					HTTPGet:       &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromInt32(sandboxtls.HealthPort)},
+					PeriodSeconds: 2,
+				},
+				SecurityContext: &corev1.SecurityContext{
+					AllowPrivilegeEscalation: &no,
+					ReadOnlyRootFilesystem:   &yes,
+					RunAsNonRoot:             &yes,
+					Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+				},
+				Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("250m"),
+					corev1.ResourceMemory: resource.MustParse("64Mi"),
+				}},
+				VolumeMounts: []corev1.VolumeMount{{Name: "tls", MountPath: tlsDir, ReadOnly: true}},
 			},
-			SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: &no},
-			Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
-				corev1.ResourceCPU:              d.opts.CPU,
-				corev1.ResourceMemory:           d.opts.Memory,
-				corev1.ResourceEphemeralStorage: d.opts.Disk,
-			}},
-			VolumeMounts: []corev1.VolumeMount{
-				{Name: "brickie", MountPath: "/brickie", ReadOnly: true},
-				{Name: "workspace", MountPath: sandboxd.Workspace},
-			},
-		}},
+		},
 		Volumes: []corev1.Volume{
 			{Name: "brickie", EmptyDir: &corev1.EmptyDirVolumeSource{}},
 			{Name: "workspace", EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &disk}},
+			{Name: "tls", Secret: &corev1.SecretVolumeSource{SecretName: tlsSecret}},
 		},
 	}
 	if d.runtimeClass != "" {
@@ -474,7 +584,29 @@ func (d *Driver) touch(ctx context.Context, name string, ttl time.Duration) erro
 
 func (d *Driver) dial(ctx context.Context, claim *extensionsv1beta1.SandboxClaim) (*sandboxd.Client, error) {
 	ip := claim.Status.SandboxStatus.PodIPs[0]
-	return sandboxd.Dial(ctx, net.JoinHostPort(ip, strconv.Itoa(sandboxd.GRPCPort)), net.JoinHostPort(ip, strconv.Itoa(sandboxd.RESTPort)), d.token)
+	return sandboxd.Dial(ctx, net.JoinHostPort(ip, strconv.Itoa(sandboxtls.GRPCPort)), net.JoinHostPort(ip, strconv.Itoa(sandboxtls.RESTPort)), d.token, d.tls)
+}
+
+// hold renews the claim's deadline for as long as the turn runs, so no turn,
+// however long, loses its pod to idle expiry. The idle window starts again
+// when the caller touches the claim after the turn.
+func (d *Driver) hold(ctx context.Context, req engine.TurnRequest, ttl time.Duration) (release func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		t := time.NewTicker(max(ttl/2, time.Second))
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := d.touch(ctx, req.SandboxName, ttl); err != nil && ctx.Err() == nil {
+					req.Logf("renew sandbox %s deadline failed: %v", req.SandboxName, err)
+				}
+			}
+		}
+	}()
+	return cancel
 }
 
 func (d *Driver) lock(name string) *sync.Mutex {
@@ -559,10 +691,12 @@ func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.Tu
 		req.Logf("sandbox %s reused (pod %s)", req.SandboxName, claim.Status.SandboxStatus.Name)
 	}
 	driver.Phase(timings, "claim", start)
-	if err := d.touch(ctx, req.SandboxName, ttl+driver.Timeout(req)); err != nil {
+	if err := d.touch(ctx, req.SandboxName, ttl); err != nil {
 		return engine.TurnResponse{}, fmt.Errorf("sandbox %s: hold claim: %w", req.SandboxName, err)
 	}
+	release := d.hold(ctx, req, ttl)
 	resp, err := driver.Run(ctx, c, req, fresh, timings, driver.Options{MaxFileBytes: d.opts.MaxFileBytes, Staging: d.opts.Staging})
+	release()
 	if err != nil {
 		return engine.TurnResponse{}, err
 	}

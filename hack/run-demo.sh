@@ -106,7 +106,7 @@ else
     "docker run --rm -v \$PWD:/src golang:1.27.3 go build -o bin/brickie ./cmd/brickie"
   docker run --rm -v "$PWD:/src" -w /src \
     -v brickie_go_cache:/go/pkg/mod -v brickie_go_build:/root/.cache/go-build \
-    -e CGO_ENABLED=0 -e GOOS="$(uname -s | tr '[:upper:]' '[:lower:]')" \
+    -e CGO_ENABLED=0 -e GOFIPS140=v1.0.0 -e GOOS="$(uname -s | tr '[:upper:]' '[:lower:]')" \
     -e GOARCH="$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')" \
     golang:1.27.3 go build -o bin/brickie ./cmd/brickie
   REBUILT=1

@@ -58,6 +58,7 @@ type providerConfig struct {
 	warmReplicas      int
 	providerNamespace string
 	providerSelector  string
+	providerImage     string
 	egress            string
 	cpu, memory, disk string
 }
@@ -91,6 +92,7 @@ func (c providerConfig) registerFlags(cmd *cobra.Command) {
 	f.Int64Var(&providerCfg.maxSnapshot, "max-snapshot-bytes", envIntOr("BRICKIE_MAX_SNAPSHOT_BYTES", 1<<30), "largest workspace snapshot a turn may produce")
 	f.StringVar(&providerCfg.providerNamespace, "provider-namespace", envOr("BRICKIE_PROVIDER_NAMESPACE", ""), "kubernetes: namespace of this provider pod and its sandboxd token secret (default: the pod's own)")
 	f.StringVar(&providerCfg.providerSelector, "provider-selector", envOr("BRICKIE_PROVIDER_SELECTOR", "app.kubernetes.io/name=brickie"), "kubernetes: labels of this provider pod; only pods matching them may reach sandboxes")
+	f.StringVar(&providerCfg.providerImage, "provider-image", envOr("BRICKIE_PROVIDER_IMAGE", ""), "kubernetes: this provider's own image, run in every sandbox pod as the TLS proxy in front of sandboxd (brickie sandbox-tls)")
 	f.StringVar(&providerCfg.egress, "sandbox-egress", envOr("BRICKIE_SANDBOX_EGRESS", "internet"), "kubernetes: what sandboxes may reach: internet (public addresses and cluster DNS) or none")
 	f.StringVar(&providerCfg.cpu, "sandbox-cpu", envOr("BRICKIE_SANDBOX_CPU", "1"), "kubernetes: cpu limit per sandbox")
 	f.StringVar(&providerCfg.memory, "sandbox-memory", envOr("BRICKIE_SANDBOX_MEMORY", "2Gi"), "kubernetes: memory limit per sandbox")
@@ -124,7 +126,7 @@ func runProvider(ctx context.Context, c providerConfig) error {
 		if err != nil {
 			return err
 		}
-		opts := kubernetes.Options{Namespace: c.namespace, Image: c.image, Runtime: c.runtime, WarmReplicas: c.warmReplicas, IdleTTL: c.idleTTL, MaxFileBytes: c.maxFile, Staging: store, ProviderNamespace: c.providerNamespace, ProviderSelector: selector, Egress: c.egress}
+		opts := kubernetes.Options{Namespace: c.namespace, Image: c.image, Runtime: c.runtime, WarmReplicas: c.warmReplicas, IdleTTL: c.idleTTL, MaxFileBytes: c.maxFile, Staging: store, ProviderNamespace: c.providerNamespace, ProviderSelector: selector, ProviderImage: c.providerImage, Egress: c.egress}
 		for q, s := range map[*resource.Quantity]string{&opts.CPU: c.cpu, &opts.Memory: c.memory, &opts.Disk: c.disk} {
 			if *q, err = resource.ParseQuantity(s); err != nil {
 				return fmt.Errorf("sandbox resource %q: %w", s, err)

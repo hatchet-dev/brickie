@@ -129,20 +129,49 @@ func (s *Store) ListMeta(ctx context.Context) ([]SandboxMeta, error) {
 	}
 }
 
+// Result is the recorded outcome of a turn that stored a snapshot, so a retry
+// of the same run publishes it instead of running the turn again.
+func (s *Store) Result(ctx context.Context, runID string) (TurnResult, error) {
+	var r TurnResult
+	b, err := s.bucket.ReadAll(ctx, "results/"+runID+".json")
+	if err != nil {
+		return r, err
+	}
+	return r, json.Unmarshal(b, &r)
+}
+
+func (s *Store) SetResult(ctx context.Context, runID string, r TurnResult) error {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	return s.bucket.WriteAll(ctx, "results/"+runID+".json", b, nil)
+}
+
 // Prune deletes the provider's own objects older than maxAge and leaves the
-// rest of the bucket alone.
+// rest of the bucket alone. A sandbox whose latest pointer is younger than
+// that keeps its metadata and the snapshot the pointer names, however old.
 func (s *Store) Prune(ctx context.Context, maxAge time.Duration) {
 	cutoff := time.Now().Add(-maxAge)
-	for _, prefix := range []string{"snapshots/", "latest/", "meta/", "staging/"} {
+	keep := map[string]bool{}
+	for _, prefix := range []string{"latest/", "snapshots/", "meta/", "results/", "staging/"} {
 		iter := s.bucket.List(&blob.ListOptions{Prefix: prefix})
 		for {
 			obj, err := iter.Next(ctx)
 			if err != nil {
 				break
 			}
-			if obj.ModTime.Before(cutoff) {
-				_ = s.bucket.Delete(ctx, obj.Key)
+			if keep[obj.Key] || !obj.ModTime.Before(cutoff) {
+				if prefix == "latest/" {
+					id := strings.TrimPrefix(obj.Key, "latest/")
+					keep["meta/"+id+".json"] = true
+					if snap, err := s.Latest(ctx, id); err == nil {
+						keep["snapshots/"+snap] = true
+					}
+				}
+				continue
 			}
+			_ = s.bucket.Delete(ctx, obj.Key)
 		}
 	}
 }

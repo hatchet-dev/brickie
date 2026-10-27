@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,13 +22,19 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	processv1 "sigs.k8s.io/agent-sandbox/packages/sandboxd/spec/process/v1"
 )
 
-// Image is pinned by index digest: upstream publishes only a moving
-// latest-main tag from its staging registry.
-const Image = "us-central1-docker.pkg.dev/k8s-staging-images/agent-sandbox/sandboxd@sha256:141be71c5a3106cdd2cd3d33461acaa50a3e9945d3611239e91f803e06350bfa"
+// Upstream publishes only a moving latest-main tag from its staging registry,
+// so the index digest is what is pinned. Image is our mirror of exactly that
+// digest, copied by .github/workflows/mirror-sandboxd.yaml.
+const (
+	digest   = "sha256:141be71c5a3106cdd2cd3d33461acaa50a3e9945d3611239e91f803e06350bfa"
+	Upstream = "us-central1-docker.pkg.dev/k8s-staging-images/agent-sandbox/sandboxd@" + digest
+	Image    = "ghcr.io/hatchet-dev/sandboxd@" + digest
+)
 
 const (
 	ImageBinary = "/usr/local/bin/sandboxd"
@@ -43,9 +50,9 @@ const (
 )
 
 // Args are the daemon flags; the token itself never appears, only its digest.
-func Args(token string) []string {
+func Args(token, listenHost string) []string {
 	sum := sha256.Sum256([]byte(token))
-	return []string{"--root-dir", Workspace, "--listen-host", "0.0.0.0", "--auth-token-sha256", hex.EncodeToString(sum[:])}
+	return []string{"--root-dir", Workspace, "--listen-host", listenHost, "--auth-token-sha256", hex.EncodeToString(sum[:])}
 }
 
 func NewToken() (string, error) {
@@ -128,17 +135,27 @@ type Client struct {
 	token string
 }
 
-// Dial connects to a daemon and waits until it answers health checks.
-func Dial(ctx context.Context, grpcAddr, restAddr, token string) (*Client, error) {
-	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithPerRPCCredentials(bearer(token)))
+// Dial connects to a daemon and waits until it answers health checks. With a
+// tls config both addresses are the sandbox's TLS proxy and the connection is
+// mutually authenticated; without one they are the daemon's plaintext ports.
+func Dial(ctx context.Context, grpcAddr, restAddr, token string, tlsCfg *tls.Config) (*Client, error) {
+	creds := insecure.NewCredentials()
+	rest := &url.URL{Scheme: "http", Host: restAddr, Path: "/"}
+	transport := http.DefaultTransport
+	if tlsCfg != nil {
+		creds = credentials.NewTLS(tlsCfg)
+		rest.Scheme = "https"
+		transport = &http.Transport{TLSClientConfig: tlsCfg, IdleConnTimeout: 30 * time.Second}
+	}
+	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(creds), grpc.WithPerRPCCredentials(bearer(token)))
 	if err != nil {
 		return nil, err
 	}
 	c := &Client{
 		conn:  conn,
 		proc:  processv1.NewProcessServiceClient(conn),
-		http:  &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		rest:  &url.URL{Scheme: "http", Host: restAddr, Path: "/"},
+		http:  &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		rest:  rest,
 		token: token,
 	}
 	deadline := time.Now().Add(readyTimeout)
@@ -163,6 +180,7 @@ func Dial(ctx context.Context, grpcAddr, restAddr, token string) (*Client, error
 func (c *Client) Close() {
 	if c != nil && c.conn != nil {
 		_ = c.conn.Close()
+		c.http.CloseIdleConnections()
 	}
 }
 

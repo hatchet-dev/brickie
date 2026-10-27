@@ -61,7 +61,7 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 		SlotConfig: map[string]int32{"default": int32(min(slots, 10000))}, // #nosec G115 -- bounded above
 	})
 	if err != nil {
-		return fmt.Errorf("open operator session (the tenant needs SERVER_GRPC_OPERATORS_ENABLED and Hatchet v0.110 or newer): %w", err)
+		return fmt.Errorf("open operator session (the tenant needs SERVER_GRPC_OPERATORS_ENABLED and Hatchet v0.110.0 or newer): %w", err)
 	}
 	provider.session = session
 	close(provider.ready)

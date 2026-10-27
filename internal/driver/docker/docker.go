@@ -123,7 +123,7 @@ func (d *Driver) createContainer(ctx context.Context, name, image string) (*sand
 		Name: name,
 		Config: &container.Config{
 			Image:        image,
-			Entrypoint:   append([]string{sandboxdPath}, sandboxd.Args(d.token)...),
+			Entrypoint:   append([]string{sandboxdPath}, sandboxd.Args(d.token, "0.0.0.0")...),
 			Cmd:          []string{},
 			WorkingDir:   sandboxd.Workspace,
 			Labels:       map[string]string{label: "true"},
@@ -167,7 +167,7 @@ func (d *Driver) connect(ctx context.Context, containerID string) (*sandboxd.Cli
 	if grpcAddr == "" || restAddr == "" {
 		return nil, errors.New("sandboxd ports were not published")
 	}
-	return sandboxd.Dial(ctx, grpcAddr, restAddr, d.token)
+	return sandboxd.Dial(ctx, grpcAddr, restAddr, d.token, nil)
 }
 
 func (d *Driver) removeContainer(ctx context.Context, name string) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -134,7 +135,7 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		return TurnResult{}, err
 	}
 	if input.Fn == PresignFn {
-		return r.presign(ctx, sandboxID)
+		return r.presign(ctx, sandboxID, input.Input)
 	}
 	req := TurnRequest{
 		SandboxID:    sandboxID,
@@ -152,6 +153,13 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 	mu := r.lock(sandboxID)
 	mu.Lock()
 	defer mu.Unlock()
+	if done, err := r.opts.Store.Result(ctx, runID); err == nil {
+		req.Logf("turn already ran and stored snapshot %s: publishing it again", runID)
+		if err := r.publish(ctx, sandboxID, runID); err != nil {
+			return TurnResult{}, err
+		}
+		return done, nil
+	}
 	if input.SnapshotID != "" {
 		rd, err := r.opts.Store.OpenSnapshot(ctx, input.SnapshotID)
 		if err != nil {
@@ -194,12 +202,17 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		return TurnResult{}, fmt.Errorf("write snapshot %s: %w", runID, err)
 	}
 	req.Logf("snapshot %s stored (%d bytes)", runID, cp.written)
+	done := TurnResult{Output: resp.Output, SandboxID: sandboxID, SnapshotID: runID, Timings: resp.Timings}
+	if err := r.opts.Store.SetResult(ctx, runID, done); err != nil {
+		req.Logf("record turn result failed: %v", err)
+		return TurnResult{}, fmt.Errorf("record result of turn %s: %w", runID, err)
+	}
 	if err := r.publish(ctx, sandboxID, runID); err != nil {
 		req.Logf("%v", err)
 		return TurnResult{}, err
 	}
 	req.Logf("turn done: snapshot=%s", runID)
-	return TurnResult{Output: resp.Output, SandboxID: sandboxID, SnapshotID: runID, Timings: resp.Timings}, nil
+	return done, nil
 }
 
 var sandboxIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
@@ -278,7 +291,28 @@ func (r *turnRunner) list(ctx context.Context, input TurnInput) (TurnResult, err
 	return TurnResult{Output: out}, nil
 }
 
-func (r *turnRunner) presign(ctx context.Context, sandboxID string) (TurnResult, error) {
+// presign mints URLs for a new staging key, or with stagedKey a fresh read
+// URL for a file the sandbox already staged, so a replayed read outlives the
+// URL it was first given.
+func (r *turnRunner) presign(ctx context.Context, sandboxID string, raw json.RawMessage) (TurnResult, error) {
+	var in struct {
+		StagedKey string `json:"stagedKey"`
+	}
+	_ = json.Unmarshal(raw, &in)
+	if in.StagedKey != "" {
+		if !strings.HasPrefix(in.StagedKey, "staging/"+sandboxID+"/") {
+			return TurnResult{}, fmt.Errorf("staged key %q does not belong to sandbox %s", in.StagedKey, sandboxID)
+		}
+		getURL, err := r.opts.Store.GetURL(ctx, in.StagedKey)
+		if err != nil {
+			return TurnResult{}, fmt.Errorf("sign staged key: %w", err)
+		}
+		b, err := json.Marshal(map[string]any{"stagedKey": in.StagedKey, "getUrl": getURL, "expiresInMs": stagingURLExpiry.Milliseconds()})
+		if err != nil {
+			return TurnResult{}, err
+		}
+		return TurnResult{Output: b, SandboxID: sandboxID}, nil
+	}
 	key := r.opts.Store.NewKey(sandboxID)
 	putURL, getURL, err := r.opts.Store.Presign(ctx, key)
 	if err != nil {
