@@ -1,5 +1,6 @@
 *
 !cmd
 !internal
+!hack/check-fips.sh
 !go.mod
 !go.sum

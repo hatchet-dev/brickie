@@ -70,7 +70,7 @@ tar -xzf brickie_0.1.0_Linux_x86_64.tar.gz
 HATCHET_CLIENT_TOKEN=... ./brickie worker
 ```
 
-Release binaries are built with the CMVP-certified Go Cryptographic Module and run in FIPS 140-3 mode; `brickie version` shows it. Snapshots, sandbox metadata, and files over 2 MiB live in `--store`: a bucket, or on one machine a `file://` directory the SDK can also reach, `~/.brickie/store` by default. Flags and their `BRICKIE_*` environment variables are listed by `brickie worker --help`. This mode runs sandboxes as plain containers on the local engine, for development and single-tenant use; untrusted agents belong on the Kubernetes driver, which runs from the container image built by the `Dockerfile`.
+Release binaries are built with the CMVP-certified Go Cryptographic Module and run in FIPS 140-3 mode; `brickie version` shows it. Snapshots, sandbox metadata, and files over 2 MiB live in `--store`: a bucket, or on one machine a `file://` directory the SDK can also reach, `~/.brickie/store` by default. Flags and their `BRICKIE_*` environment variables are listed by `brickie worker --help`. This mode runs sandboxes as plain containers on the local engine, for development and single-tenant use; untrusted agents belong on the Kubernetes driver, which runs from the container image `ghcr.io/hatchet-dev/brickie`, published with every release.
 
 ## Use an external Hatchet instance
 
