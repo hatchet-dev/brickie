@@ -1,7 +1,6 @@
 package sandboxtls
 
 import (
-	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"net"
@@ -53,8 +52,7 @@ func TestProxyAdmitsOnlyTheProvider(t *testing.T) {
 	go func() { _ = srv.Serve(ln) }()
 	defer srv.Stop()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go func() { _ = Serve(ctx, dir, ln.Addr().String(), rest.Listener.Addr().String()) }()
 	for i := 0; ; i++ {
 		res, err := http.Get("http://127.0.0.1:8081/healthz")

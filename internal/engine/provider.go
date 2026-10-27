@@ -175,6 +175,9 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 	case !IsNotFound(err):
 		return TurnResult{}, fmt.Errorf("read result of turn %s: %w", runID, err)
 	}
+	if prev, err = r.opts.Store.Latest(ctx, sandboxID); err != nil && !IsNotFound(err) {
+		return TurnResult{}, fmt.Errorf("read latest snapshot of %s: %w", sandboxID, err)
+	}
 	if input.SnapshotID != "" {
 		rd, err := r.opts.Store.OpenSnapshot(ctx, input.SnapshotID)
 		if err != nil {
@@ -218,10 +221,6 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 	}
 	req.Logf("snapshot %s stored (%d bytes)", runID, cp.written)
 	done = TurnResult{Output: resp.Output, SandboxID: sandboxID, SnapshotID: runID, Timings: resp.Timings}
-	prev, err = r.opts.Store.Latest(ctx, sandboxID)
-	if err != nil && !IsNotFound(err) {
-		return TurnResult{}, fmt.Errorf("read latest snapshot of %s: %w", sandboxID, err)
-	}
 	if err := r.opts.Store.SetResult(ctx, runID, done, prev); err != nil {
 		req.Logf("record turn result failed: %v", err)
 		return TurnResult{}, fmt.Errorf("record result of turn %s: %w", runID, err)
