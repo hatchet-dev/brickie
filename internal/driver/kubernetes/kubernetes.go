@@ -20,6 +20,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	nodev1 "k8s.io/api/node/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -28,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -54,6 +54,7 @@ const (
 	tlsDir             = "/etc/brickie/tls"
 	gvisorRuntimeClass = "gvisor"
 	kataRuntimeClass   = "kata-clh"
+	readyTimeout       = 5 * time.Minute
 )
 
 var runtimeClasses = map[string]string{"gvisor": gvisorRuntimeClass, "kata": kataRuntimeClass}
@@ -65,7 +66,6 @@ type Options struct {
 	Runtime      string
 	WarmReplicas int
 	IdleTTL      time.Duration
-	ReadyTimeout time.Duration
 	MaxFileBytes int64
 	Staging      driver.Staging
 
@@ -86,7 +86,6 @@ type Options struct {
 type Driver struct {
 	opts         Options
 	client       ctrlclient.Client
-	clientset    *kubernetes.Clientset
 	runtimeClass string
 	token        string
 	ca           *sandboxtls.CA
@@ -107,9 +106,6 @@ func New(opts Options) (*Driver, error) {
 	}
 	if opts.Image == "" {
 		opts.Image = "alpine:3"
-	}
-	if opts.ReadyTimeout <= 0 {
-		opts.ReadyTimeout = 5 * time.Minute
 	}
 	if opts.IdleTTL <= 0 {
 		opts.IdleTTL = 30 * time.Minute
@@ -156,11 +152,7 @@ func New(opts Options) (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	cs, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		return nil, err
-	}
-	d := &Driver{opts: opts, client: c, clientset: cs, pools: map[string]string{}, sandboxes: map[string]*sync.Mutex{}}
+	d := &Driver{opts: opts, client: c, pools: map[string]string{}, sandboxes: map[string]*sync.Mutex{}}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := d.detectRuntime(ctx); err != nil {
@@ -196,8 +188,7 @@ func loadConfig() (*rest.Config, error) {
 
 func (d *Driver) detectRuntime(ctx context.Context) error {
 	has := func(name string) bool {
-		_, err := d.clientset.NodeV1().RuntimeClasses().Get(ctx, name, metav1.GetOptions{})
-		return err == nil
+		return d.client.Get(ctx, ctrlclient.ObjectKey{Name: name}, &nodev1.RuntimeClass{}) == nil
 	}
 	switch mode := d.opts.Runtime; mode {
 	case "none":
@@ -233,15 +224,13 @@ func (d *Driver) detectRuntime(ctx context.Context) error {
 // digest and the CA certificate.
 func (d *Driver) ensureCredentials(ctx context.Context) error {
 	ns := d.opts.ProviderNamespace
-	secrets := d.clientset.CoreV1().Secrets(ns)
-	var s *corev1.Secret
+	s := &corev1.Secret{Name: tokenSecret, Namespace: ns}
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var err error
-		s, err = secrets.Get(ctx, tokenSecret, metav1.GetOptions{})
+		err := d.client.Get(ctx, ctrlclient.ObjectKeyFromObject(s), s)
 		if apierrors.IsNotFound(err) {
-			s, err = secrets.Create(ctx, &corev1.Secret{Name: tokenSecret, Namespace: ns}, metav1.CreateOptions{})
-			if apierrors.IsAlreadyExists(err) {
-				s, err = secrets.Get(ctx, tokenSecret, metav1.GetOptions{})
+			*s = corev1.Secret{Name: tokenSecret, Namespace: ns}
+			if err = d.client.Create(ctx, s); apierrors.IsAlreadyExists(err) {
+				err = d.client.Get(ctx, ctrlclient.ObjectKeyFromObject(s), s)
 			}
 		}
 		if err != nil {
@@ -270,8 +259,7 @@ func (d *Driver) ensureCredentials(ctx context.Context) error {
 		if !changed {
 			return nil
 		}
-		s, err = secrets.Update(ctx, s, metav1.UpdateOptions{})
-		return err
+		return d.client.Update(ctx, s)
 	})
 	if err != nil {
 		return fmt.Errorf("sandboxd secret %s/%s: %w", ns, tokenSecret, err)
@@ -289,9 +277,9 @@ func (d *Driver) ensureCredentials(ctx context.Context) error {
 // before it expires or when the CA changed.
 func (d *Driver) ensureServerCert(ctx context.Context) error {
 	ns := d.opts.Namespace
-	secrets := d.clientset.CoreV1().Secrets(ns)
+	s := &corev1.Secret{Name: tlsSecret, Namespace: ns}
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		s, err := secrets.Get(ctx, tlsSecret, metav1.GetOptions{})
+		err := d.client.Get(ctx, ctrlclient.ObjectKeyFromObject(s), s)
 		if err == nil && bytes.Equal(s.Data[sandboxtls.CAFile], d.ca.CertPEM) && d.ca.Fresh(s.Data[sandboxtls.CertFile]) {
 			return nil
 		}
@@ -304,12 +292,11 @@ func (d *Driver) ensureServerCert(ctx context.Context) error {
 		}
 		data := map[string][]byte{sandboxtls.CAFile: d.ca.CertPEM, sandboxtls.CertFile: certPEM, sandboxtls.KeyFile: keyPEM}
 		if apierrors.IsNotFound(err) {
-			_, err = secrets.Create(ctx, &corev1.Secret{Name: tlsSecret, Namespace: ns, Data: data}, metav1.CreateOptions{})
-			return err
+			*s = corev1.Secret{Name: tlsSecret, Namespace: ns, Data: data}
+			return d.client.Create(ctx, s)
 		}
 		s.Data = data
-		_, err = secrets.Update(ctx, s, metav1.UpdateOptions{})
-		return err
+		return d.client.Update(ctx, s)
 	})
 	if err != nil {
 		return fmt.Errorf("sandbox tls secret %s/%s: %w", ns, tlsSecret, err)
@@ -529,7 +516,7 @@ func (d *Driver) ensureClaim(ctx context.Context, pool string, req engine.TurnRe
 	default:
 		return nil, err
 	}
-	deadline := time.Now().Add(d.opts.ReadyTimeout)
+	deadline := time.Now().Add(readyTimeout)
 	var last *extensionsv1beta1.SandboxClaim
 	for time.Now().Before(deadline) {
 		if claim, err := d.getClaim(ctx, req.SandboxName); err == nil {
@@ -550,7 +537,7 @@ func (d *Driver) ensureClaim(ctx context.Context, pool string, req engine.TurnRe
 			detail = c.Reason + ": " + c.Message
 		}
 	}
-	return nil, fmt.Errorf("sandbox claim %s not ready within %s (%s)", req.SandboxName, d.opts.ReadyTimeout, detail)
+	return nil, fmt.Errorf("sandbox claim %s not ready within %s (%s)", req.SandboxName, readyTimeout, detail)
 }
 
 func (d *Driver) waitGone(ctx context.Context, name string) error {

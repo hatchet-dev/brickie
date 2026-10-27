@@ -11,45 +11,37 @@ import (
 	"time"
 
 	"gocloud.dev/blob"
-
-	"github.com/hatchet-dev/brickie/internal/image"
 )
 
 type ProviderOpts struct {
 	Driver           Driver
 	Store            *Store
-	ImageProvider    image.Provider
-	Retries          int
+	DefaultImage     string
 	MaxIdleTTL       time.Duration
 	MaxSnapshotBytes int64
 }
 
 // turnExecutionTimeout bounds a hung sandbox. The real limits are the SDK's
 // per-call timeoutMs and the calling task's own timeout.
-const turnExecutionTimeout = 24 * time.Hour
+const (
+	turnExecutionTimeout = 24 * time.Hour
+	turnRetries          = 2
+)
 
 type turnRunner struct {
-	opts          ProviderOpts
-	imageProvider image.Provider
-	retries       int
+	opts ProviderOpts
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
 }
 
 func newTurnRunner(opts ProviderOpts) *turnRunner {
-	r := &turnRunner{opts: opts, imageProvider: opts.ImageProvider, retries: opts.Retries, locks: map[string]*sync.Mutex{}}
-	if r.retries == 0 {
-		r.retries = 2
-	}
+	r := &turnRunner{opts: opts, locks: map[string]*sync.Mutex{}}
 	if r.opts.MaxIdleTTL == 0 {
 		r.opts.MaxIdleTTL = 24 * time.Hour
 	}
 	if r.opts.MaxSnapshotBytes == 0 {
 		r.opts.MaxSnapshotBytes = 1 << 30
-	}
-	if r.imageProvider == nil {
-		r.imageProvider = image.Registry{}
 	}
 	return r
 }
@@ -123,12 +115,8 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 	if input.Fn == ListFn {
 		return r.list(ctx, input)
 	}
-	resolved, err := r.imageProvider.Resolve(ctx, image.Spec{Ref: input.Image})
-	if err != nil {
-		if log != nil {
-			log(fmt.Sprintf("resolve image %q failed: %v", input.Image, err))
-		}
-		return TurnResult{}, fmt.Errorf("resolve image: %w", err)
+	if input.Image == "" {
+		input.Image = r.opts.DefaultImage
 	}
 	sandboxID, meta, err := r.resolveSandbox(ctx, &input, runID)
 	if err != nil {
@@ -138,18 +126,17 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		return r.presign(ctx, sandboxID, input.Input)
 	}
 	req := TurnRequest{
-		SandboxID:    sandboxID,
-		SandboxName:  "brickie-" + sandboxID,
-		Image:        resolved.Ref,
-		Fn:           input.Fn,
-		Input:        input.Input,
-		SnapshotID:   input.SnapshotID,
-		CheckpointID: runID,
-		IdleTTL:      meta.IdleTTL,
-		Metadata:     meta.Metadata,
-		Log:          log,
+		SandboxID:   sandboxID,
+		SandboxName: "brickie-" + sandboxID,
+		Image:       input.Image,
+		Fn:          input.Fn,
+		Input:       input.Input,
+		SnapshotID:  input.SnapshotID,
+		IdleTTL:     meta.IdleTTL,
+		Metadata:    meta.Metadata,
+		Log:         log,
 	}
-	req.Logf("turn start: fn=%s image=%s sandbox=%s snapshot=%s", input.Fn, resolved.Ref, req.SandboxName, orNone(input.SnapshotID))
+	req.Logf("turn start: fn=%s image=%s sandbox=%s snapshot=%s", input.Fn, input.Image, req.SandboxName, orNone(input.SnapshotID))
 	mu := r.lock(sandboxID)
 	mu.Lock()
 	defer mu.Unlock()

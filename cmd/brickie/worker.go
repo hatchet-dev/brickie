@@ -5,18 +5,17 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/hatchet-dev/hatchet/pkg/cmdutils"
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/hatchet-dev/brickie/internal/driver/docker"
 	"github.com/hatchet-dev/brickie/internal/driver/fsops"
 	"github.com/hatchet-dev/brickie/internal/driver/kubernetes"
 	"github.com/hatchet-dev/brickie/internal/engine"
-	"github.com/hatchet-dev/brickie/internal/image"
 )
 
 func envDurationOr(key string, fallback time.Duration) time.Duration {
@@ -63,21 +62,9 @@ type providerConfig struct {
 	cpu, memory, disk string
 }
 
-func parseSelector(s string) (map[string]string, error) {
-	out := map[string]string{}
-	for kv := range strings.SplitSeq(s, ",") {
-		k, v, ok := strings.Cut(strings.TrimSpace(kv), "=")
-		if !ok || k == "" {
-			return nil, fmt.Errorf("selector %q: want key=value pairs separated by commas", s)
-		}
-		out[k] = v
-	}
-	return out, nil
-}
-
 var providerCfg providerConfig
 
-func (c providerConfig) registerFlags(cmd *cobra.Command) {
+func registerFlags(cmd *cobra.Command) {
 	f := cmd.Flags()
 	f.StringVar(&providerCfg.driver, "driver", envOr("BRICKIE_DRIVER", "docker"), "where sandboxes run: docker (the local engine) or kubernetes (agent-sandbox claims)")
 	f.StringVar(&providerCfg.image, "image", envOr("BRICKIE_SANDBOX_IMAGE", "alpine:3"), "default sandbox image")
@@ -122,9 +109,9 @@ func runProvider(ctx context.Context, c providerConfig) error {
 		if store.Local() {
 			fmt.Fprintf(os.Stderr, "brickie: --store is a directory inside the provider pod; files larger than --max-file-bytes need an object store\n")
 		}
-		selector, err := parseSelector(c.providerSelector)
+		selector, err := labels.ConvertSelectorToLabelsMap(c.providerSelector)
 		if err != nil {
-			return err
+			return fmt.Errorf("--provider-selector: %w", err)
 		}
 		opts := kubernetes.Options{Namespace: c.namespace, Image: c.image, Runtime: c.runtime, WarmReplicas: c.warmReplicas, IdleTTL: c.idleTTL, MaxFileBytes: c.maxFile, Staging: store, ProviderNamespace: c.providerNamespace, ProviderSelector: selector, ProviderImage: c.providerImage, Egress: c.egress}
 		for q, s := range map[*resource.Quantity]string{&opts.CPU: c.cpu, &opts.Memory: c.memory, &opts.Disk: c.disk} {
@@ -143,7 +130,7 @@ func runProvider(ctx context.Context, c providerConfig) error {
 	return engine.RunOperatorProvider(ctx, engine.ProviderOpts{
 		Driver:           drv,
 		Store:            store,
-		ImageProvider:    image.Registry{Default: c.image},
+		DefaultImage:     c.image,
 		MaxIdleTTL:       c.maxIdleTTL,
 		MaxSnapshotBytes: c.maxSnapshot,
 	}, c.slots)
@@ -159,6 +146,6 @@ func workerCmd() *cobra.Command {
 			return runProvider(ctx, providerCfg)
 		},
 	}
-	providerCfg.registerFlags(cmd)
+	registerFlags(cmd)
 	return cmd
 }

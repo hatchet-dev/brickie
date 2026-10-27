@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,11 +15,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const teardownTimeout = 30 * time.Second
-
-func operatorActionID() string {
-	return strings.ToLower(TaskName + ":" + TaskName)
-}
+const (
+	teardownTimeout = 30 * time.Second
+	actionID        = TaskName + ":" + TaskName
+)
 
 type operatorProvider struct {
 	runner   *turnRunner
@@ -57,7 +55,7 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 		Name:     "brickie-provider",
 	}, operator.OpenOpts{
 		Handler:    provider,
-		Actions:    []string{operatorActionID()},
+		Actions:    []string{actionID},
 		SlotConfig: map[string]int32{"default": int32(min(slots, 10000))}, // #nosec G115 -- bounded above
 	})
 	if err != nil {
@@ -70,9 +68,9 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 		Name: TaskName,
 		Tasks: []*operatorclient.CreateTaskOpts{{
 			ReadableId: TaskName,
-			Action:     operatorActionID(),
+			Action:     actionID,
 			Timeout:    turnExecutionTimeout.String(),
-			Retries:    int32(min(runner.retries, 100)), // #nosec G115 -- bounded above
+			Retries:    turnRetries,
 		}},
 	}
 	actions, err := session.PutWorkflow(ctx, workflow)

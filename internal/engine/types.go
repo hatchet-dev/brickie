@@ -53,7 +53,6 @@ type TurnRequest struct {
 	SnapshotSize int64
 	SnapshotID   string
 	Checkpoint   io.Writer
-	CheckpointID string
 	IdleTTL      time.Duration
 	Metadata     map[string]string
 	Log          func(message string)

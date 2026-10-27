@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
 
@@ -45,10 +45,11 @@ func DefaultStoreURL() string {
 // one machine, where the SDK and the provider share the directory.
 func OpenStore(ctx context.Context, rawURL string) (*Store, error) {
 	s := &Store{}
-	if u, err := url.Parse(rawURL); err == nil && u.Scheme != "file" && strings.Trim(u.Path, "/") != "" {
+	u, err := url.Parse(rawURL)
+	if err == nil && u.Scheme != "file" && strings.Trim(u.Path, "/") != "" {
 		return nil, fmt.Errorf("open store %q: a prefix goes in the query, not the path: %s://%s?prefix=%s/", rawURL, u.Scheme, u.Host, strings.Trim(u.Path, "/"))
 	}
-	if u, err := url.Parse(rawURL); err == nil && u.Scheme == "file" {
+	if err == nil && u.Scheme == "file" {
 		s.dir = u.Path
 		if err := os.MkdirAll(s.dir, 0o700); err != nil {
 			return nil, err
@@ -187,7 +188,7 @@ func (s *Store) Prune(ctx context.Context, maxAge time.Duration) {
 }
 
 func (s *Store) NewKey(sandboxID string) string {
-	return "staging/" + sandboxID + "/" + uuid.NewString()
+	return "staging/" + sandboxID + "/" + rand.Text()
 }
 
 func (s *Store) Presign(ctx context.Context, key string) (putURL, getURL string, err error) {
@@ -227,13 +228,4 @@ func (s *Store) Put(ctx context.Context, key string, r io.Reader) error {
 		return err
 	}
 	return w.Close()
-}
-
-// Delete removes a staged file; a missing one is not an error.
-func (s *Store) Delete(ctx context.Context, key string) error {
-	err := s.bucket.Delete(ctx, key)
-	if err != nil && gcerrors.Code(err) != gcerrors.NotFound {
-		return err
-	}
-	return nil
 }

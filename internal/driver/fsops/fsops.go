@@ -37,7 +37,6 @@ const Marker = ".brickie-sandbox"
 type Staging interface {
 	Open(ctx context.Context, key string) (io.ReadCloser, error)
 	Put(ctx context.Context, key string, r io.Reader) error
-	Delete(ctx context.Context, key string) error
 	GetURL(ctx context.Context, key string) (string, error)
 	NewKey(sandboxID string) string
 }
