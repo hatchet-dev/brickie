@@ -20,7 +20,7 @@ services:
     image: ghcr.io/hatchet-dev/hatchet/hatchet-lite:v0.110.5
     ports:
       - "127.0.0.1:8888:8888"
-      - "127.0.0.1:7077:7077"
+      - "${BRICKIE_HATCHET_BIND:-127.0.0.1}:7077:7077"
     depends_on:
       postgres:
         condition: service_healthy

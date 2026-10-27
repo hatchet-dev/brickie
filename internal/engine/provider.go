@@ -6,86 +6,183 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
+	"sync"
 	"time"
 
-	"github.com/hatchet-dev/brickie/internal/image"
+	"gocloud.dev/blob"
 )
 
 type ProviderOpts struct {
-	Driver        Driver
-	Store         *Store
-	ImageProvider image.Provider
-	Retries       int
-	MaxIdleTTL    time.Duration
+	Driver           Driver
+	Store            *Store
+	DefaultImage     string
+	MaxIdleTTL       time.Duration
+	MaxSnapshotBytes int64
 }
 
 // turnExecutionTimeout bounds a hung sandbox. The real limits are the SDK's
 // per-call timeoutMs and the calling task's own timeout.
-const turnExecutionTimeout = 24 * time.Hour
+const (
+	turnExecutionTimeout = 24 * time.Hour
+	turnRetries          = 2
+)
 
 type turnRunner struct {
-	opts          ProviderOpts
-	imageProvider image.Provider
-	retries       int
+	opts ProviderOpts
+
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
 }
 
 func newTurnRunner(opts ProviderOpts) *turnRunner {
-	r := &turnRunner{opts: opts, imageProvider: opts.ImageProvider, retries: opts.Retries}
-	if r.retries == 0 {
-		r.retries = 2
-	}
+	r := &turnRunner{opts: opts, locks: map[string]*sync.Mutex{}}
 	if r.opts.MaxIdleTTL == 0 {
 		r.opts.MaxIdleTTL = 24 * time.Hour
 	}
-	if r.imageProvider == nil {
-		r.imageProvider = image.Registry{}
+	if r.opts.MaxSnapshotBytes == 0 {
+		r.opts.MaxSnapshotBytes = 1 << 30
 	}
 	return r
+}
+
+// lock serializes a sandbox's turns through execution and publication, so
+// the latest pointer can never move backwards.
+func (r *turnRunner) lock(sandboxID string) *sync.Mutex {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	mu, ok := r.locks[sandboxID]
+	if !ok {
+		mu = &sync.Mutex{}
+		r.locks[sandboxID] = mu
+	}
+	return mu
+}
+
+// checkpoint streams a turn's workspace tar into the store, opening the
+// object on the first byte so turns that change nothing write nothing.
+type checkpoint struct {
+	store   *Store
+	id      string
+	ctx     context.Context
+	cancel  context.CancelFunc
+	w       *blob.Writer
+	limit   int64
+	written int64
+}
+
+func (c *checkpoint) Write(p []byte) (int, error) {
+	if c.w == nil {
+		w, err := c.store.NewSnapshotWriter(c.ctx, c.id)
+		if err != nil {
+			return 0, err
+		}
+		c.w = w
+	}
+	if c.written+int64(len(p)) > c.limit {
+		return 0, fmt.Errorf("snapshot exceeds the provider limit of %d bytes (--max-snapshot-bytes)", c.limit)
+	}
+	c.written += int64(len(p))
+	return c.w.Write(p)
+}
+
+func (c *checkpoint) commit() error {
+	if c.w == nil {
+		return errors.New("the turn produced an empty snapshot")
+	}
+	return c.w.Close()
+}
+
+func (c *checkpoint) abort() {
+	c.cancel()
+	if c.w != nil {
+		_ = c.w.Close()
+	}
+}
+
+func (r *turnRunner) publish(ctx context.Context, sandboxID, snapshotID string) error {
+	var err error
+	for attempt := range 3 {
+		if err = r.opts.Store.SetLatest(ctx, sandboxID, snapshotID); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
+	}
+	return fmt.Errorf("record latest snapshot for %s: %w", sandboxID, err)
 }
 
 func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log func(string)) (TurnResult, error) {
 	if input.Fn == ListFn {
 		return r.list(ctx, input)
 	}
-	resolved, err := r.imageProvider.Resolve(ctx, image.Spec{Ref: input.Image})
-	if err != nil {
-		if log != nil {
-			log(fmt.Sprintf("resolve image %q failed: %v", input.Image, err))
-		}
-		return TurnResult{}, fmt.Errorf("resolve image: %w", err)
+	if input.Image == "" {
+		input.Image = r.opts.DefaultImage
 	}
 	sandboxID, meta, err := r.resolveSandbox(ctx, &input, runID)
 	if err != nil {
 		return TurnResult{}, err
 	}
 	if input.Fn == PresignFn {
-		return r.presign(ctx, sandboxID)
+		return r.presign(ctx, sandboxID, input.Input)
 	}
 	req := TurnRequest{
-		SandboxID:    sandboxID,
-		SandboxName:  "brickie-" + sandboxID,
-		Image:        resolved.Ref,
-		Fn:           input.Fn,
-		Input:        input.Input,
-		SnapshotID:   input.SnapshotID,
-		CheckpointID: runID,
-		IdleTTL:      meta.IdleTTL,
-		Metadata:     meta.Metadata,
-		Log:          log,
+		SandboxID:   sandboxID,
+		SandboxName: "brickie-" + sandboxID,
+		Image:       input.Image,
+		Fn:          input.Fn,
+		Input:       input.Input,
+		SnapshotID:  input.SnapshotID,
+		IdleTTL:     meta.IdleTTL,
+		Metadata:    meta.Metadata,
+		Log:         log,
 	}
-	req.Logf("turn start: fn=%s image=%s sandbox=%s snapshot=%s", input.Fn, resolved.Ref, req.SandboxName, orNone(input.SnapshotID))
+	req.Logf("turn start: fn=%s image=%s sandbox=%s snapshot=%s", input.Fn, input.Image, req.SandboxName, orNone(input.SnapshotID))
+	mu := r.lock(sandboxID)
+	mu.Lock()
+	defer mu.Unlock()
+	done, prev, err := r.opts.Store.Result(ctx, runID)
+	switch {
+	case err == nil:
+		latest, err := r.opts.Store.Latest(ctx, sandboxID)
+		if err != nil && !IsNotFound(err) {
+			return TurnResult{}, fmt.Errorf("read latest snapshot of %s: %w", sandboxID, err)
+		}
+		switch latest {
+		case prev:
+			req.Logf("turn already ran and stored snapshot %s: publishing it again", runID)
+			if err := r.publish(ctx, sandboxID, runID); err != nil {
+				return TurnResult{}, err
+			}
+		case runID:
+			req.Logf("turn already ran and published snapshot %s", runID)
+		default:
+			req.Logf("turn already ran; a later turn published %s, so snapshot %s stays unpublished", latest, runID)
+		}
+		return done, nil
+	case !IsNotFound(err):
+		return TurnResult{}, fmt.Errorf("read result of turn %s: %w", runID, err)
+	}
+	if prev, err = r.opts.Store.Latest(ctx, sandboxID); err != nil && !IsNotFound(err) {
+		return TurnResult{}, fmt.Errorf("read latest snapshot of %s: %w", sandboxID, err)
+	}
 	if input.SnapshotID != "" {
-		tar, err := r.opts.Store.ReadSnapshot(ctx, input.SnapshotID)
+		rd, err := r.opts.Store.OpenSnapshot(ctx, input.SnapshotID)
 		if err != nil {
 			req.Logf("read snapshot %s failed: %v", input.SnapshotID, err)
 			return TurnResult{}, fmt.Errorf("read snapshot %s: %w", input.SnapshotID, err)
 		}
-		req.SnapshotTar = tar
-		req.Logf("loaded snapshot %s (%d bytes)", input.SnapshotID, len(tar))
+		defer func() { _ = rd.Close() }()
+		req.Snapshot, req.SnapshotSize = rd, rd.Size()
+		req.Logf("loaded snapshot %s (%d bytes)", input.SnapshotID, rd.Size())
 	}
+	cp := &checkpoint{store: r.opts.Store, id: runID, limit: r.opts.MaxSnapshotBytes}
+	cp.ctx, cp.cancel = context.WithCancel(ctx)
+	defer cp.cancel()
+	req.Checkpoint = cp
 	started := time.Now()
 	resp, err := r.opts.Driver.RunTurn(ctx, req)
 	if err != nil {
+		cp.abort()
 		req.Logf("turn failed after %s: %v", time.Since(started).Round(time.Millisecond), err)
 		return TurnResult{}, err
 	}
@@ -94,21 +191,33 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		if err := r.opts.Store.SetMeta(ctx, meta); err != nil {
 			return TurnResult{}, fmt.Errorf("record sandbox %s: %w", sandboxID, err)
 		}
+		if input.SnapshotID != "" {
+			if err := r.publish(ctx, sandboxID, input.SnapshotID); err != nil {
+				return TurnResult{}, err
+			}
+		}
 	}
-	if resp.SnapshotTar == nil {
+	if !resp.Snapshotted {
+		cp.abort()
 		req.Logf("turn done: no snapshot")
 		return TurnResult{Output: resp.Output, SandboxID: sandboxID, Timings: resp.Timings}, nil
 	}
-	if err := r.opts.Store.WriteSnapshot(ctx, runID, resp.SnapshotTar); err != nil {
+	if err := cp.commit(); err != nil {
 		req.Logf("write snapshot %s failed: %v", runID, err)
 		return TurnResult{}, fmt.Errorf("write snapshot %s: %w", runID, err)
 	}
-	req.Logf("snapshot %s stored (%d bytes)", runID, len(resp.SnapshotTar))
-	if err := r.opts.Store.SetLatest(ctx, sandboxID, runID); err != nil {
-		req.Logf("record latest snapshot for %s failed: %v", sandboxID, err)
+	req.Logf("snapshot %s stored (%d bytes)", runID, cp.written)
+	done = TurnResult{Output: resp.Output, SandboxID: sandboxID, SnapshotID: runID, Timings: resp.Timings}
+	if err := r.opts.Store.SetResult(ctx, runID, done, prev); err != nil {
+		req.Logf("record turn result failed: %v", err)
+		return TurnResult{}, fmt.Errorf("record result of turn %s: %w", runID, err)
+	}
+	if err := r.publish(ctx, sandboxID, runID); err != nil {
+		req.Logf("%v", err)
+		return TurnResult{}, err
 	}
 	req.Logf("turn done: snapshot=%s", runID)
-	return TurnResult{Output: resp.Output, SandboxID: sandboxID, SnapshotID: runID, Timings: resp.Timings}, nil
+	return done, nil
 }
 
 var sandboxIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
@@ -134,12 +243,17 @@ func (r *turnRunner) resolveSandbox(ctx context.Context, input *TurnInput, runID
 			return "", SandboxMeta{}, errors.New("connect needs a sandbox id")
 		}
 		meta, err := r.opts.Store.Meta(ctx, id)
-		if err != nil {
+		if IsNotFound(err) {
 			return "", SandboxMeta{}, fmt.Errorf("unknown sandbox %s: it was not created on this provider", id)
 		}
-		if latest, err := r.opts.Store.Latest(ctx, id); err == nil {
-			input.SnapshotID = latest
+		if err != nil {
+			return "", SandboxMeta{}, fmt.Errorf("read sandbox %s: %w", id, err)
 		}
+		latest, err := r.opts.Store.Latest(ctx, id)
+		if err != nil && !IsNotFound(err) {
+			return "", SandboxMeta{}, fmt.Errorf("read latest snapshot of %s: %w", id, err)
+		}
+		input.SnapshotID = latest
 		return id, meta, nil
 	default:
 		if id == "" {
@@ -182,7 +296,28 @@ func (r *turnRunner) list(ctx context.Context, input TurnInput) (TurnResult, err
 	return TurnResult{Output: out}, nil
 }
 
-func (r *turnRunner) presign(ctx context.Context, sandboxID string) (TurnResult, error) {
+// presign mints URLs for a new staging key, or with stagedKey a fresh read
+// URL for a file the sandbox already staged, so a replayed read outlives the
+// URL it was first given.
+func (r *turnRunner) presign(ctx context.Context, sandboxID string, raw json.RawMessage) (TurnResult, error) {
+	var in struct {
+		StagedKey string `json:"stagedKey"`
+	}
+	_ = json.Unmarshal(raw, &in)
+	if in.StagedKey != "" {
+		if !strings.HasPrefix(in.StagedKey, "staging/"+sandboxID+"/") {
+			return TurnResult{}, fmt.Errorf("staged key %q does not belong to sandbox %s", in.StagedKey, sandboxID)
+		}
+		getURL, err := r.opts.Store.GetURL(ctx, in.StagedKey)
+		if err != nil {
+			return TurnResult{}, fmt.Errorf("sign staged key: %w", err)
+		}
+		b, err := json.Marshal(map[string]any{"stagedKey": in.StagedKey, "getUrl": getURL, "expiresInMs": stagingURLExpiry.Milliseconds()})
+		if err != nil {
+			return TurnResult{}, err
+		}
+		return TurnResult{Output: b, SandboxID: sandboxID}, nil
+	}
 	key := r.opts.Store.NewKey(sandboxID)
 	putURL, getURL, err := r.opts.Store.Presign(ctx, key)
 	if err != nil {

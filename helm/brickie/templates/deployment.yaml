@@ -35,7 +35,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: provider
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "brickie.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -59,6 +59,16 @@ spec:
               value: {{ .Values.sandbox.runtime | quote }}
             - name: BRICKIE_WARM_REPLICAS
               value: {{ .Values.sandbox.warmReplicas | quote }}
+            - name: BRICKIE_PROVIDER_IMAGE
+              value: {{ include "brickie.image" . | quote }}
+            - name: BRICKIE_SANDBOX_EGRESS
+              value: {{ .Values.sandbox.egress | quote }}
+            - name: BRICKIE_SANDBOX_CPU
+              value: {{ .Values.sandbox.resources.cpu | quote }}
+            - name: BRICKIE_SANDBOX_MEMORY
+              value: {{ .Values.sandbox.resources.memory | quote }}
+            - name: BRICKIE_SANDBOX_DISK
+              value: {{ .Values.sandbox.resources.disk | quote }}
             - name: BRICKIE_STORE
               value: {{ .Values.store | default "file:///var/lib/brickie" | quote }}
             - name: BRICKIE_SLOTS

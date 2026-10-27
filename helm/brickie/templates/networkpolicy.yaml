@@ -1,8 +1,8 @@
-{{- if .Values.networkPolicy.enabled }}
+{{- if .Values.networkPolicy.egressCIDRs }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "brickie.fullname" . }}-sandboxes
+  name: {{ include "brickie.fullname" . }}-sandbox-egress
   namespace: {{ include "brickie.sandboxNamespace" . }}
   labels:
     {{- include "brickie.labels" . | nindent 4 }}
@@ -12,21 +12,7 @@ spec:
       - key: agents.x-k8s.io/sandbox-name-hash
         operator: Exists
   policyTypes:
-    - Ingress
     - Egress
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Release.Namespace }}
-          podSelector:
-            matchLabels:
-              {{- include "brickie.selectorLabels" . | nindent 14 }}
-      ports:
-        - protocol: TCP
-          port: 8080
-        - protocol: TCP
-          port: 9090
   egress:
     {{- if .Values.networkPolicy.allowDNS }}
     - to:

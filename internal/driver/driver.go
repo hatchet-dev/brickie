@@ -4,7 +4,6 @@
 package driver
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -29,26 +28,17 @@ func Phase(timings map[string]int64, name string, start time.Time) {
 	timings[name] = time.Since(start).Milliseconds()
 }
 
-// Timeout is how long a turn may hold its sandbox beyond the idle TTL: the
-// command timeout for $command, nothing for the rest.
-func Timeout(req engine.TurnRequest) time.Duration {
-	if req.Fn != engine.CommandFn {
-		return 0
-	}
-	var in engine.CommandInput
-	_ = json.Unmarshal(req.Input, &in)
-	return time.Duration(in.TimeoutMs) * time.Millisecond
-}
-
 // Run executes one turn on a sandbox that is already up. fresh says the
 // workspace is empty and must be restored from the snapshot, if there is one.
+// The marker is never extracted, so a restore that fails part way cannot make
+// the next connect skip it.
 func Run(ctx context.Context, c *sandboxd.Client, req engine.TurnRequest, fresh bool, timings map[string]int64, opts Options) (engine.TurnResponse, error) {
-	if fresh && req.SnapshotTar != nil {
+	if fresh && req.Snapshot != nil {
 		start := time.Now()
-		if err := c.Write(ctx, restoreName, bytes.NewReader(req.SnapshotTar), int64(len(req.SnapshotTar))); err != nil {
+		if err := c.Write(ctx, restoreName, req.Snapshot, req.SnapshotSize); err != nil {
 			return engine.TurnResponse{}, fmt.Errorf("restore snapshot: %w", err)
 		}
-		res, err := c.Run(ctx, []string{"sh", "-c", "tar -xzf " + restoreName + " && rm -f " + restoreName}, 0)
+		res, err := c.Run(ctx, []string{"sh", "-c", "tar -xzf " + restoreName + " --exclude=./" + fsops.Marker + " && rm -f " + restoreName}, 0)
 		if err != nil {
 			return engine.TurnResponse{}, fmt.Errorf("restore snapshot: %w", err)
 		}
@@ -97,7 +87,7 @@ func Run(ctx context.Context, c *sandboxd.Client, req engine.TurnRequest, fresh 
 		return engine.TurnResponse{Output: outJSON, Timings: timings}, nil
 	}
 	start = time.Now()
-	res, err := c.Run(ctx, []string{"tar", "-czf", "-", "."}, 0)
+	res, err := c.RunTo(ctx, []string{"tar", "-czf", "-", "--exclude=./" + fsops.Marker, "."}, req.Checkpoint, 0)
 	if err != nil {
 		return engine.TurnResponse{}, fmt.Errorf("snapshot workspace: %w", err)
 	}
@@ -105,5 +95,5 @@ func Run(ctx context.Context, c *sandboxd.Client, req engine.TurnRequest, fresh 
 		return engine.TurnResponse{}, fmt.Errorf("snapshot workspace (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 	Phase(timings, "checkpoint", start)
-	return engine.TurnResponse{Output: outJSON, SnapshotTar: res.Stdout, Timings: timings}, nil
+	return engine.TurnResponse{Output: outJSON, Snapshotted: true, Timings: timings}, nil
 }

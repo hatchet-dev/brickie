@@ -98,10 +98,7 @@ async function putStaged(url: string, bytes: Buffer): Promise<void> {
 
 async function getStaged(url: string): Promise<Buffer> {
   if (url.startsWith('file://')) {
-    const path = decodeURIComponent(url.slice('file://'.length));
-    const bytes = await fs.readFile(path);
-    await fs.rm(path, { force: true });
-    return bytes;
+    return fs.readFile(decodeURIComponent(url.slice('file://'.length)));
   }
   const res = await fetch(url);
   if (!res.ok) throw new FilesystemError('staging_failed', `stage download failed: HTTP ${res.status}`);
@@ -124,10 +121,21 @@ export class Files {
   read(path: string, opts: ReadOpts & { format: 'blob' }): Promise<Blob>;
   async read(path: string, opts: ReadOpts = {}): Promise<string | Uint8Array | Blob> {
     const out = await this.call('read', { path });
-    const bytes = out.url ? await getStaged(out.url) : Buffer.from(out.content ?? '', 'base64');
+    const bytes = out.url ? await this.readStaged(out.url, out.stagedKey!) : Buffer.from(out.content ?? '', 'base64');
     if (opts.format === 'bytes') return new Uint8Array(bytes);
     if (opts.format === 'blob') return new Blob([new Uint8Array(bytes)]);
     return bytes.toString('utf8');
+  }
+
+  /** A replayed durable read may hold a URL that has expired; the provider signs the same staged file again. */
+  private async readStaged(url: string, stagedKey: string): Promise<Buffer> {
+    try {
+      return await getStaged(url);
+    } catch (e) {
+      if (url.startsWith('file://') || !(e instanceof FilesystemError)) throw e;
+      const { getUrl } = await this.call('presign', { stagedKey });
+      return getStaged(getUrl!);
+    }
   }
 
   /** Writes one file or several. Parent directories are created. Bytes are stored exactly. Files over 2 MiB go through the provider's `--store` instead of Hatchet. */

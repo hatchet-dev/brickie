@@ -16,3 +16,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "brickie.sandboxNamespace" -}}
 {{- .Values.sandbox.namespace | default .Release.Namespace -}}
 {{- end -}}
+
+{{- define "brickie.image" -}}
+{{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) -}}
+{{- end -}}

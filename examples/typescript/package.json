@@ -7,7 +7,7 @@
     "fs-demo": "tsx fs-demo.ts"
   },
   "dependencies": {
-    "@hatchet/sandbox": "workspace:*",
+    "@hatchet-dev/sandbox": "workspace:*",
     "@hatchet-dev/typescript-sdk": "^1.33.1"
   },
   "devDependencies": {

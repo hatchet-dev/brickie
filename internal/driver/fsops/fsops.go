@@ -28,12 +28,15 @@ const Prefix = "$fs."
 // DefaultMaxFileBytes bounds one read or write unless the provider sets its own limit.
 const DefaultMaxFileBytes = 2 << 20
 
+// Marker is the file a driver may keep in the workspace root to recognise a
+// pod it has already bound; listings and snapshots leave it out.
+const Marker = ".brickie-sandbox"
+
 // Staging carries files larger than the limit between the SDK and the
 // workspace through the object store.
 type Staging interface {
 	Open(ctx context.Context, key string) (io.ReadCloser, error)
 	Put(ctx context.Context, key string, r io.Reader) error
-	Delete(ctx context.Context, key string) error
 	GetURL(ctx context.Context, key string) (string, error)
 	NewKey(sandboxID string) string
 }
@@ -126,6 +129,9 @@ func listDir(ctx context.Context, c *sandboxd.Client, dir string, depth int) ([]
 	}
 	entries := []fsEntry{}
 	for _, r := range raw {
+		if dir == "." && r.Name == Marker {
+			continue
+		}
 		e := toEntry(dir, r)
 		entries = append(entries, e)
 		if e.Type == "dir" && depth > 1 {
@@ -144,10 +150,32 @@ func mustRun(ctx context.Context, c *sandboxd.Client, argv ...string) error {
 	if err != nil {
 		return err
 	}
+	if res.ExitCode == escapeExit {
+		return failf("invalid_path", "path resolves outside the workspace")
+	}
 	if res.ExitCode != 0 {
 		return failf("invalid", "%s", strings.TrimSpace(res.Stderr))
 	}
 	return nil
+}
+
+const escapeExit = 86
+
+// confine runs a command only after the nearest existing ancestor of a path
+// resolves, through any symlinks, to a place under the workspace. The check
+// and the command run inside the sandbox; only the agent itself could race it.
+const confine = `t=$1; shift
+p=$t
+while [ ! -e "$p" ]; do
+  case $p in .|/) break;; esac
+  p=$(dirname -- "$p")
+done
+r=$(readlink -f -- "$p") || exit 86
+case $r in /workspace|/workspace/*) ;; *) exit 86;; esac
+exec "$@"`
+
+func confined(target string, argv ...string) []string {
+	return append([]string{"sh", "-c", confine, "sh", target}, argv...)
 }
 
 func runFS(ctx context.Context, c *sandboxd.Client, fn string, in fsInput, opts Options) (out map[string]any, mutated bool, err error) {
@@ -184,9 +212,12 @@ func runFS(ctx context.Context, c *sandboxd.Client, fn string, in fsInput, opts 
 			}
 			return map[string]any{"stagedKey": key, "url": url, "size": e.Size}, false, nil
 		}
-		b, err := io.ReadAll(body)
+		b, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
 		if err != nil {
 			return nil, false, err
+		}
+		if int64(len(b)) > maxBytes {
+			return nil, false, failf("too_large", "%q grew past %d bytes while being read; read it again", p, maxBytes)
 		}
 		return map[string]any{"content": base64.StdEncoding.EncodeToString(b)}, false, nil
 	case "write":
@@ -210,7 +241,6 @@ func runFS(ctx context.Context, c *sandboxd.Client, fn string, in fsInput, opts 
 				}
 				err = c.Write(ctx, fp, src, -1)
 				_ = src.Close()
-				_ = opts.Staging.Delete(ctx, f.StagedKey)
 				if err != nil {
 					return nil, true, err
 				}
@@ -252,7 +282,7 @@ func runFS(ctx context.Context, c *sandboxd.Client, fn string, in fsInput, opts 
 		if _, err := c.Stat(ctx, p); err == nil {
 			return map[string]any{"created": false}, false, nil
 		}
-		if err := mustRun(ctx, c, "mkdir", "-p", "--", p); err != nil {
+		if err := mustRun(ctx, c, confined(p, "mkdir", "-p", "--", p)...); err != nil {
 			return nil, false, err
 		}
 		return map[string]any{"created": true}, true, nil
@@ -264,11 +294,11 @@ func runFS(ctx context.Context, c *sandboxd.Client, fn string, in fsInput, opts 
 		if _, err := c.Stat(ctx, p); err != nil {
 			return nil, false, err
 		}
-		argv := []string{"mv", "-T", "--", p, np}
+		argv := confined(path.Dir(p), confined(np, "mv", "-T", "--", p, np)...)
 		if fn == Prefix+"copy" {
-			argv = []string{"cp", "-aT", "--", p, np}
+			argv = confined(path.Dir(p), confined(np, "cp", "-aT", "--", p, np)...)
 		}
-		if err := mustRun(ctx, c, "mkdir", "-p", "--", path.Dir(np)); err != nil {
+		if err := mustRun(ctx, c, confined(path.Dir(np), "mkdir", "-p", "--", path.Dir(np))...); err != nil {
 			return nil, false, err
 		}
 		if err := mustRun(ctx, c, argv...); err != nil {
@@ -283,7 +313,7 @@ func runFS(ctx context.Context, c *sandboxd.Client, fn string, in fsInput, opts 
 		if p == "." {
 			return nil, false, failf("invalid_path", "cannot remove the workspace root")
 		}
-		if err := c.Remove(ctx, p, true); err != nil {
+		if err := mustRun(ctx, c, confined(path.Dir(p), "rm", "-rf", "--", p)...); err != nil {
 			return nil, false, err
 		}
 		return map[string]any{}, true, nil

@@ -160,7 +160,7 @@ export class Sandbox {
   }
 }
 
-/** `hatchet.sandbox`, added to `HatchetClient` by importing `@hatchet/sandbox`. */
+/** `hatchet.sandbox`, added to `HatchetClient` by importing `@hatchet-dev/sandbox`. */
 export interface SandboxNamespace {
   /** Starts a new sandbox. Inside a durable task this is a durable step. */
   create(opts?: SandboxOpts): Promise<Sandbox>;

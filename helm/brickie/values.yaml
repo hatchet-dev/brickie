@@ -3,12 +3,12 @@
 # Minimum install:
 #   helm upgrade --install brickie ./helm/brickie -n brickie --create-namespace \
 #     --set hatchet.token=$HATCHET_CLIENT_TOKEN \
-#     --set store=s3://my-bucket/brickie
+#     --set store='s3://my-bucket?prefix=brickie/'
 #
 # Everything the provider needs is bundled: the agent-sandbox controller, the
-# Kata Containers runtime (default), an optional gVisor installer, and a
-# NetworkPolicy for sandbox pods. See README.md for what to set up first.
-# values.schema.json rejects unknown keys, so a typo fails at install time.
+# Kata Containers runtime (default), and an optional gVisor installer. See
+# README.md for what to set up first. values.schema.json rejects unknown keys,
+# so a typo fails at install time.
 
 # Keep this at 1. Calls on one sandbox are serialized inside the provider
 # process; a second replica would race on the same sandbox.
@@ -17,10 +17,13 @@ replicaCount: 1
 # How many sandbox calls in Hatchet the provider runs at the same time.
 slots: 10
 
-# The provider image. Build from the repository Dockerfile for a private registry.
+# The provider image. It also runs in every sandbox pod as the TLS proxy in
+# front of the sandbox daemon, so sandbox nodes pull it too. An empty tag means
+# the chart's appVersion. Build from the repository Dockerfile for a private
+# registry.
 image:
-  repository: # WIP: ghcr.io/hatchet-dev/brickie
-  tag: latest
+  repository: ghcr.io/hatchet-dev/brickie
+  tag: ""
   pullPolicy: IfNotPresent
 
 # Pull secrets for the provider image. Sandbox images are pulled by the sandbox
@@ -75,26 +78,42 @@ sandbox:
   # pool on first use; the default image gets one at provider start.
   warmReplicas: 2
 
+  # What the agent's own code may reach from a sandbox. The provider writes a
+  # NetworkPolicy into every sandbox template, which the agent-sandbox
+  # controller keeps: ingress only from the provider pod, and egress
+  #   internet: public addresses and cluster DNS; private ranges and the
+  #             cloud metadata endpoint are blocked
+  #   none:     nothing; add an allow-list with networkPolicy.egressCIDRs
+  # Only enforced by a CNI that implements NetworkPolicy.
+  egress: internet
+
+  # Limits on every sandbox pod; the workspace volume has the same size limit
+  # as disk. An agent can exhaust its own sandbox, not the node.
+  resources:
+    cpu: "1"
+    memory: 2Gi
+    disk: 10Gi
+
 # Bucket for snapshots, sandbox metadata, and files larger than
 # sandbox.maxFileBytes. Empty keeps everything on the pod's emptyDir, which is
 # lost on restart, and files over maxFileBytes then fail because your
 # application cannot reach the pod's disk. Development only.
-#   s3://bucket/prefix?region=us-east-1
-#   gs://bucket/prefix
-#   azblob://container/prefix
-#   s3://bucket/prefix?endpoint=https://host&use_path_style=true   (S3-compatible)
+# A prefix goes in the query, not the path:
+#   s3://bucket?prefix=brickie/&region=us-east-1
+#   gs://bucket?prefix=brickie/
+#   azblob://container?prefix=brickie/
+#   s3://bucket?prefix=brickie/&endpoint=https://host&use_path_style=true   (S3-compatible)
 # Credentials come from the pod identity (IRSA, workload identity) or from
 # storeSecret, a Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY or the
 # GCP and Azure equivalents.
 store: ""
 storeSecret: ""
 
-# NetworkPolicy for sandbox pods: no egress except what is listed, and no
-# ingress except the provider pod, which runs commands and moves files over the
-# sandbox daemon's ports 9090 and 8080. Only enforced by a CNI that implements
-# NetworkPolicy (Cilium, Calico, or the EKS VPC CNI with network policy enabled).
+# Extra egress for sandbox pods on top of sandbox.egress, as a second
+# NetworkPolicy in the sandbox namespace. Policies add up, so with
+# sandbox.egress: none this is the whole allow-list. Rendered only when
+# egressCIDRs is set.
 networkPolicy:
-  enabled: true
   # Let sandboxes resolve names through kube-dns.
   allowDNS: true
   # CIDRs sandboxes may reach, for example your LLM provider's ranges.

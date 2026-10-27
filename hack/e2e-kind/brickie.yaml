@@ -23,7 +23,7 @@ rules:
     verbs: ["get", "create", "update"]
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "create"]
+    verbs: ["get", "create", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -72,11 +72,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: brickie
+      app.kubernetes.io/name: brickie
   template:
     metadata:
       labels:
-        app: brickie
+        app.kubernetes.io/name: brickie
     spec:
       serviceAccountName: brickie
       securityContext:
@@ -94,6 +94,8 @@ spec:
               value: brickie
             - name: BRICKIE_SANDBOX_RUNTIME
               value: none
+            - name: BRICKIE_PROVIDER_IMAGE
+              value: brickie:e2e
             - name: BRICKIE_WARM_REPLICAS
               value: "1"
             - name: BRICKIE_STORE

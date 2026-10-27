@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
 
@@ -45,7 +45,11 @@ func DefaultStoreURL() string {
 // one machine, where the SDK and the provider share the directory.
 func OpenStore(ctx context.Context, rawURL string) (*Store, error) {
 	s := &Store{}
-	if u, err := url.Parse(rawURL); err == nil && u.Scheme == "file" {
+	u, err := url.Parse(rawURL)
+	if err == nil && u.Scheme != "file" && strings.Trim(u.Path, "/") != "" {
+		return nil, fmt.Errorf("open store %q: a prefix goes in the query, not the path: %s://%s?prefix=%s/", rawURL, u.Scheme, u.Host, strings.Trim(u.Path, "/"))
+	}
+	if err == nil && u.Scheme == "file" {
 		s.dir = u.Path
 		if err := os.MkdirAll(s.dir, 0o700); err != nil {
 			return nil, err
@@ -69,13 +73,19 @@ func (s *Store) Close() error { return s.bucket.Close() }
 // Local reports a file:// store, which only the provider's own machine can reach.
 func (s *Store) Local() bool { return s.dir != "" }
 
-func (s *Store) ReadSnapshot(ctx context.Context, id string) ([]byte, error) {
-	return s.bucket.ReadAll(ctx, "snapshots/"+id+".tar.gz")
+func (s *Store) OpenSnapshot(ctx context.Context, id string) (*blob.Reader, error) {
+	return s.bucket.NewReader(ctx, "snapshots/"+id+".tar.gz", nil)
 }
 
-func (s *Store) WriteSnapshot(ctx context.Context, id string, tar []byte) error {
-	return s.bucket.WriteAll(ctx, "snapshots/"+id+".tar.gz", tar, nil)
+// NewSnapshotWriter streams a workspace tar into the store. Close commits it;
+// cancelling ctx first abandons it.
+func (s *Store) NewSnapshotWriter(ctx context.Context, id string) (*blob.Writer, error) {
+	return s.bucket.NewWriter(ctx, "snapshots/"+id+".tar.gz", nil)
 }
+
+// IsNotFound reports a store read of something that does not exist, as
+// opposed to a store that could not be read.
+func IsNotFound(err error) bool { return gcerrors.Code(err) == gcerrors.NotFound }
 
 func (s *Store) Latest(ctx context.Context, sandboxID string) (string, error) {
 	b, err := s.bucket.ReadAll(ctx, "latest/"+sandboxID)
@@ -120,26 +130,65 @@ func (s *Store) ListMeta(ctx context.Context) ([]SandboxMeta, error) {
 	}
 }
 
+type storedResult struct {
+	Result TurnResult `json:"result"`
+	Prev   string     `json:"prev"`
+}
+
+// Result is the recorded outcome of a turn that stored a snapshot, with the
+// latest pointer as it stood when the turn ran, so a retry of the same run
+// publishes the snapshot instead of running the turn again, and only if no
+// later turn has published since.
+func (s *Store) Result(ctx context.Context, runID string) (result TurnResult, prev string, err error) {
+	b, err := s.bucket.ReadAll(ctx, "results/"+runID+".json")
+	if err != nil {
+		return TurnResult{}, "", err
+	}
+	var r storedResult
+	if err := json.Unmarshal(b, &r); err != nil {
+		return TurnResult{}, "", err
+	}
+	return r.Result, r.Prev, nil
+}
+
+func (s *Store) SetResult(ctx context.Context, runID string, result TurnResult, prev string) error {
+	b, err := json.Marshal(storedResult{Result: result, Prev: prev})
+	if err != nil {
+		return err
+	}
+	return s.bucket.WriteAll(ctx, "results/"+runID+".json", b, nil)
+}
+
 // Prune deletes the provider's own objects older than maxAge and leaves the
-// rest of the bucket alone.
+// rest of the bucket alone. A sandbox whose latest pointer is younger than
+// that keeps its metadata and the snapshot the pointer names, however old.
 func (s *Store) Prune(ctx context.Context, maxAge time.Duration) {
 	cutoff := time.Now().Add(-maxAge)
-	for _, prefix := range []string{"snapshots/", "latest/", "meta/", "staging/"} {
+	keep := map[string]bool{}
+	for _, prefix := range []string{"latest/", "snapshots/", "meta/", "results/", "staging/"} {
 		iter := s.bucket.List(&blob.ListOptions{Prefix: prefix})
 		for {
 			obj, err := iter.Next(ctx)
 			if err != nil {
 				break
 			}
-			if obj.ModTime.Before(cutoff) {
-				_ = s.bucket.Delete(ctx, obj.Key)
+			if keep[obj.Key] || !obj.ModTime.Before(cutoff) {
+				if prefix == "latest/" {
+					id := strings.TrimPrefix(obj.Key, "latest/")
+					keep["meta/"+id+".json"] = true
+					if snap, err := s.Latest(ctx, id); err == nil {
+						keep["snapshots/"+snap+".tar.gz"] = true
+					}
+				}
+				continue
 			}
+			_ = s.bucket.Delete(ctx, obj.Key)
 		}
 	}
 }
 
 func (s *Store) NewKey(sandboxID string) string {
-	return "staging/" + sandboxID + "/" + uuid.NewString()
+	return "staging/" + sandboxID + "/" + rand.Text()
 }
 
 func (s *Store) Presign(ctx context.Context, key string) (putURL, getURL string, err error) {
@@ -150,7 +199,7 @@ func (s *Store) Presign(ctx context.Context, key string) (putURL, getURL string,
 		u := "file://" + filepath.Join(s.dir, key)
 		return u, u, nil
 	}
-	putURL, err = s.bucket.SignedURL(ctx, key, &blob.SignedURLOptions{Method: "PUT", Expiry: stagingURLExpiry, ContentType: "application/octet-stream"})
+	putURL, err = s.bucket.SignedURL(ctx, key, &blob.SignedURLOptions{Method: "PUT", Expiry: stagingURLExpiry})
 	if err != nil {
 		return "", "", err
 	}
@@ -179,13 +228,4 @@ func (s *Store) Put(ctx context.Context, key string, r io.Reader) error {
 		return err
 	}
 	return w.Close()
-}
-
-// Delete removes a staged file; a missing one is not an error.
-func (s *Store) Delete(ctx context.Context, key string) error {
-	err := s.bucket.Delete(ctx, key)
-	if err != nil && gcerrors.Code(err) != gcerrors.NotFound {
-		return err
-	}
-	return nil
 }

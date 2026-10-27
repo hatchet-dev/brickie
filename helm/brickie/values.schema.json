@@ -30,8 +30,7 @@
           "minLength": 1
         },
         "tag": {
-          "type": "string",
-          "minLength": 1
+          "type": "string"
         },
         "pullPolicy": {
           "type": "string",
@@ -117,6 +116,31 @@
         "warmReplicas": {
           "type": "integer",
           "minimum": 1
+        },
+        "egress": {
+          "type": "string",
+          "enum": [
+            "internet",
+            "none"
+          ]
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": {
+              "type": "string",
+              "minLength": 1
+            },
+            "memory": {
+              "type": "string",
+              "minLength": 1
+            },
+            "disk": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
         }
       }
     },
@@ -130,9 +154,6 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
         "allowDNS": {
           "type": "boolean"
         },
