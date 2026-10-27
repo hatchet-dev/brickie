@@ -91,6 +91,22 @@ kubectl -n "$NS" logs deployment/brickie | grep -q "connected as grpc operator" 
 }
 ok "provider is connected to hatchet (kubectl -n $NS logs -f deployment/brickie)"
 
+step "warm pool"
+warm_ready() {
+  kubectl -n "$NS" get pods -l agents.x-k8s.io/warm-pool-sandbox -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q True
+}
+for _ in $(seq 1 150); do
+  warm_ready && break
+  sleep 2
+done
+warm_ready || {
+  echo "error: no warm sandbox pod became ready within 5 minutes:" >&2
+  kubectl -n "$NS" get pods -l agents.x-k8s.io/warm-pool-sandbox >&2
+  kubectl -n "$NS" describe pods -l agents.x-k8s.io/warm-pool-sandbox | sed -n '/^Events:/,$p' >&2
+  exit 1
+}
+ok "a warm sandbox pod is ready (sandboxd behind brickie sandbox-tls)"
+
 step "demos"
 set -a
 . ./.env
