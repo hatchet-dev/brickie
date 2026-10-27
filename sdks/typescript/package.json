@@ -1,7 +1,7 @@
 {
   "name": "@hatchet-dev/sandbox",
   "version": "0.1.0",
-  "description": "Agent sandboxes as Hatchet durable tasks",
+  "description": "Hatchet Sandbox TypeScript SDK",
   "license": "MIT",
   "repository": {
     "type": "git",
