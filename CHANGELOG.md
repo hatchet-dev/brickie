@@ -18,7 +18,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 - `--store` replaces `--snapshot-dir` and `--object-store`: snapshots, sandbox metadata, and staged files share one bucket (`s3://`, `gs://`, `azblob://`, or `file://`), `~/.brickie/store` by default, and cleanup touches only the provider's own objects.
 - Both drivers run every turn through sandboxd: reads, writes, and listings over its REST API, `mkdir`, `rename`, `copy`, and `remove` as confined commands inside the sandbox, snapshots as `tar` inside the sandbox streamed to the store. The provider never touches sandbox files itself.
 - A turn holds its sandbox for as long as it runs, however long, and the idle window starts when it ends.
-- A turn that stored its snapshot records its result before publishing the latest pointer; a retry of the same run publishes the stored result instead of running the command again.
+- A turn that stored its snapshot records its result before publishing the latest pointer; a retry of the same run returns the stored result instead of running the command again, and publishes its snapshot only if no later turn has published since.
 - Store cleanup keeps the metadata and current snapshot of any sandbox whose latest pointer is younger than 7 days.
 - `$fs.presign` with a `stagedKey` signs a fresh read URL for a file the sandbox already staged.
 - A restore never extracts the workspace marker, so a restore that fails part way is retried on the next connect instead of reporting an empty workspace.

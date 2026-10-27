@@ -129,19 +129,29 @@ func (s *Store) ListMeta(ctx context.Context) ([]SandboxMeta, error) {
 	}
 }
 
-// Result is the recorded outcome of a turn that stored a snapshot, so a retry
-// of the same run publishes it instead of running the turn again.
-func (s *Store) Result(ctx context.Context, runID string) (TurnResult, error) {
-	var r TurnResult
-	b, err := s.bucket.ReadAll(ctx, "results/"+runID+".json")
-	if err != nil {
-		return r, err
-	}
-	return r, json.Unmarshal(b, &r)
+type storedResult struct {
+	Result TurnResult `json:"result"`
+	Prev   string     `json:"prev"`
 }
 
-func (s *Store) SetResult(ctx context.Context, runID string, r TurnResult) error {
-	b, err := json.Marshal(r)
+// Result is the recorded outcome of a turn that stored a snapshot, with the
+// latest pointer as it stood when the turn ran, so a retry of the same run
+// publishes the snapshot instead of running the turn again, and only if no
+// later turn has published since.
+func (s *Store) Result(ctx context.Context, runID string) (result TurnResult, prev string, err error) {
+	b, err := s.bucket.ReadAll(ctx, "results/"+runID+".json")
+	if err != nil {
+		return TurnResult{}, "", err
+	}
+	var r storedResult
+	if err := json.Unmarshal(b, &r); err != nil {
+		return TurnResult{}, "", err
+	}
+	return r.Result, r.Prev, nil
+}
+
+func (s *Store) SetResult(ctx context.Context, runID string, result TurnResult, prev string) error {
+	b, err := json.Marshal(storedResult{Result: result, Prev: prev})
 	if err != nil {
 		return err
 	}
@@ -166,7 +176,7 @@ func (s *Store) Prune(ctx context.Context, maxAge time.Duration) {
 					id := strings.TrimPrefix(obj.Key, "latest/")
 					keep["meta/"+id+".json"] = true
 					if snap, err := s.Latest(ctx, id); err == nil {
-						keep["snapshots/"+snap] = true
+						keep["snapshots/"+snap+".tar.gz"] = true
 					}
 				}
 				continue

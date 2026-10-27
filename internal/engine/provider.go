@@ -153,12 +153,27 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 	mu := r.lock(sandboxID)
 	mu.Lock()
 	defer mu.Unlock()
-	if done, err := r.opts.Store.Result(ctx, runID); err == nil {
-		req.Logf("turn already ran and stored snapshot %s: publishing it again", runID)
-		if err := r.publish(ctx, sandboxID, runID); err != nil {
-			return TurnResult{}, err
+	done, prev, err := r.opts.Store.Result(ctx, runID)
+	switch {
+	case err == nil:
+		latest, err := r.opts.Store.Latest(ctx, sandboxID)
+		if err != nil && !IsNotFound(err) {
+			return TurnResult{}, fmt.Errorf("read latest snapshot of %s: %w", sandboxID, err)
+		}
+		switch latest {
+		case prev:
+			req.Logf("turn already ran and stored snapshot %s: publishing it again", runID)
+			if err := r.publish(ctx, sandboxID, runID); err != nil {
+				return TurnResult{}, err
+			}
+		case runID:
+			req.Logf("turn already ran and published snapshot %s", runID)
+		default:
+			req.Logf("turn already ran; a later turn published %s, so snapshot %s stays unpublished", latest, runID)
 		}
 		return done, nil
+	case !IsNotFound(err):
+		return TurnResult{}, fmt.Errorf("read result of turn %s: %w", runID, err)
 	}
 	if input.SnapshotID != "" {
 		rd, err := r.opts.Store.OpenSnapshot(ctx, input.SnapshotID)
@@ -202,8 +217,12 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		return TurnResult{}, fmt.Errorf("write snapshot %s: %w", runID, err)
 	}
 	req.Logf("snapshot %s stored (%d bytes)", runID, cp.written)
-	done := TurnResult{Output: resp.Output, SandboxID: sandboxID, SnapshotID: runID, Timings: resp.Timings}
-	if err := r.opts.Store.SetResult(ctx, runID, done); err != nil {
+	done = TurnResult{Output: resp.Output, SandboxID: sandboxID, SnapshotID: runID, Timings: resp.Timings}
+	prev, err = r.opts.Store.Latest(ctx, sandboxID)
+	if err != nil && !IsNotFound(err) {
+		return TurnResult{}, fmt.Errorf("read latest snapshot of %s: %w", sandboxID, err)
+	}
+	if err := r.opts.Store.SetResult(ctx, runID, done, prev); err != nil {
 		req.Logf("record turn result failed: %v", err)
 		return TurnResult{}, fmt.Errorf("record result of turn %s: %w", runID, err)
 	}
