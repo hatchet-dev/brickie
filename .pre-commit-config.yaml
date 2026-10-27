@@ -7,7 +7,7 @@ repos:
         language: system
         types: [go]
   - repo: https://github.com/golangci/golangci-lint
-    rev: v2.13.2
+    rev: v2.15.0
     hooks:
       - id: golangci-lint
         args: ["--config=.golangci.yml", "--allow-parallel-runners"]

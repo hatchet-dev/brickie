@@ -21,7 +21,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 	processv1 "sigs.k8s.io/agent-sandbox/packages/sandboxd/spec/process/v1"
 )
 
@@ -133,7 +132,7 @@ func (d *Driver) connectSandboxd(ctx context.Context, containerID string) (*sand
 	c := &sandboxdClient{conn: conn, proc: processv1.NewProcessServiceClient(conn)}
 	deadline := time.Now().Add(sandboxdReady)
 	for {
-		_, err := c.proc.Execute(ctx, &processv1.ExecuteRequest{Config: &processv1.ProcessConfig{Command: []string{"/bin/sh", "-c", ":"}, Cwd: proto.String(workspacePath)}})
+		_, err := c.proc.Execute(ctx, &processv1.ExecuteRequest{Config: &processv1.ProcessConfig{Command: []string{"/bin/sh", "-c", ":"}, Cwd: new(workspacePath)}})
 		if err == nil {
 			return c, nil
 		}
@@ -159,7 +158,7 @@ func (c *sandboxdClient) close() {
 // run streams a command through the daemon. On timeout the daemon kills the
 // whole process group and the result reports exit code 124.
 func (c *sandboxdClient) run(ctx context.Context, argv []string, timeout time.Duration) (execResult, error) {
-	stream, err := c.proc.Start(ctx, &processv1.StartRequest{Config: &processv1.ProcessConfig{Command: argv, Cwd: proto.String(workspacePath)}})
+	stream, err := c.proc.Start(ctx, &processv1.StartRequest{Config: &processv1.ProcessConfig{Command: argv, Cwd: new(workspacePath)}})
 	if err != nil {
 		return execResult{}, fmt.Errorf("start %s: %w", strings.Join(argv, " "), err)
 	}

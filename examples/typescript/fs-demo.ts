@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { FilesystemError } from '@hatchet/sandbox';
+import { FilesystemError } from '@hatchet-dev/sandbox';
 import { initClient } from './client.js';
 
 async function main() {

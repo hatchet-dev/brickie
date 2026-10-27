@@ -58,10 +58,10 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 	}, operator.OpenOpts{
 		Handler:    provider,
 		Actions:    []string{operatorActionID()},
-		SlotConfig: map[string]int32{"default": int32(slots)},
+		SlotConfig: map[string]int32{"default": int32(min(slots, 10000))}, // #nosec G115 -- bounded above
 	})
 	if err != nil {
-		return fmt.Errorf("open operator session (the tenant needs SERVER_GRPC_OPERATORS_ENABLED and Hatchet v0.110 or newer): %w", err)
+		return fmt.Errorf("open operator session (the tenant needs SERVER_GRPC_OPERATORS_ENABLED and Hatchet v0.110.0 or newer): %w", err)
 	}
 	provider.session = session
 	close(provider.ready)
@@ -72,7 +72,7 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 			ReadableId: TaskName,
 			Action:     operatorActionID(),
 			Timeout:    turnExecutionTimeout.String(),
-			Retries:    int32(runner.retries),
+			Retries:    int32(min(runner.retries, 100)), // #nosec G115 -- bounded above
 		}},
 	}
 	actions, err := session.PutWorkflow(ctx, workflow)
@@ -105,7 +105,7 @@ func (p *operatorProvider) HandleAction(_ context.Context, action *operatorclien
 	switch action.ActionType {
 	case operatorclient.ActionTypeStartStepRun:
 		p.wg.Add(1)
-		go p.execute(action)
+		go p.execute(action) // #nosec G118 -- the action outlives this callback; execute derives its own cancellable context
 	case operatorclient.ActionTypeCancelStepRun:
 		p.cancel(action.TaskRunExternalId)
 	}

@@ -22,8 +22,12 @@ The demo is one durable task, `agent-session`, in `examples/typescript/demo.ts`.
 
 ## TypeScript SDK
 
+```bash
+pnpm add @hatchet-dev/sandbox @hatchet-dev/typescript-sdk
+```
+
 ```ts
-import '@hatchet/sandbox';
+import '@hatchet-dev/sandbox';
 
 const session = hatchet.durableTask({
   name: 'agent-session',
@@ -57,8 +61,19 @@ Each container runs [`sandboxd`](https://github.com/kubernetes-sigs/agent-sandbo
 
 No host environment variables reach a sandbox. The provider removes a sandbox after `--sandbox-idle-ttl` without a call, or after the `idleTimeoutMs` given at create. Its snapshots stay, so `connect` can bring it back.
 
+## Run the provider
+
+The provider is one process, `brickie worker`, on a machine with Docker. It connects out to Hatchet and needs nothing inbound. Run one per Hatchet tenant. Download the archive for your platform from the GitHub release, unpack it, and start it with the tenant token:
+
+```bash
+tar -xzf brickie_0.1.0_Linux_x86_64.tar.gz
+HATCHET_CLIENT_TOKEN=... ./brickie worker
+```
+
+Release binaries are built with the CMVP-certified Go Cryptographic Module and run in FIPS 140-3 mode; `brickie version` shows it. Snapshots live under `~/.brickie/snapshots` by default (`--snapshot-dir`). Files over 2 MiB need `--object-store`, a bucket or, on one machine, a `file://` directory the SDK can also reach. Flags and their `BRICKIE_*` environment variables are listed by `brickie worker --help`. This mode runs sandboxes as plain containers on the local engine, for development and single-tenant use; untrusted agents belong on the Kubernetes driver, which ships as a container image separately.
+
 ## Use an external Hatchet instance
 
-1. Get a token from the tenant. The tenant needs gRPC operators enabled and Hatchet v0.110 or newer.
+1. Get a token from the tenant. The tenant needs gRPC operators enabled and Hatchet v0.110.0 or newer.
 2. Put it in `.env` as `HATCHET_CLIENT_TOKEN`. Remove the line `HATCHET_CLIENT_TLS_STRATEGY=none`.
 3. Run `hack/run-demo.sh` again. It does not start the local Hatchet.
