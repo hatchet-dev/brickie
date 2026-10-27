@@ -24,6 +24,8 @@ cd examples/typescript && pnpm install && pnpm typecheck
 
 Build binaries to /tmp or use `go install`, do not commit binaries.
 
+CI runs both demos end to end on every pull request: `.github/workflows/e2e-docker.yaml` on the Docker driver (`hack/run-demo.sh`) and `.github/workflows/e2e-kind.yaml` on the Kubernetes driver (`hack/e2e-kind.sh` on a kind cluster). Both pull the sandboxd mirror from GHCR, so the package has to be public.
+
 ## Rules
 
 - The engine and all execution logic are Go. The SDK stays thin: it triggers the `brickie-sandbox` task by name and never chooses a provider. Placement follows only from `HATCHET_CLIENT_TOKEN` being set or not.

@@ -3,8 +3,12 @@ set -euo pipefail
 
 # End-to-end check of the Kubernetes driver on a local kind cluster: Hatchet
 # runs on the host with docker compose, the provider runs in the cluster, and
-# both demos run from this machine. Needs Docker Desktop, kind, kubectl, node,
-# and pnpm. Safe to re-run; steps that already hold are skipped.
+# both demos run from this machine. Needs Docker, kind, kubectl, node, and
+# pnpm. Safe to re-run; steps that already hold are skipped.
+#
+# The cluster reaches Hatchet through host.docker.internal on Docker Desktop.
+# On Docker Engine (Linux, CI) that name does not resolve, so run with
+# BRICKIE_HATCHET_BIND=0.0.0.0 and the cluster uses the Docker bridge instead.
 #
 #   hack/e2e-kind.sh          both demos
 #   hack/e2e-kind.sh fs       the file demo only
@@ -57,8 +61,15 @@ kind load docker-image brickie:e2e --name "$CLUSTER" >/dev/null
 ok "brickie:e2e is on the node"
 
 step "provider deployment"
-HOST_IP=$(docker run --rm --network kind alpine:3 getent ahostsv4 host.docker.internal | awk 'NR==1{print $1}')
-[ -n "$HOST_IP" ] || { echo "error: cannot resolve host.docker.internal from the kind network (Docker Desktop only)" >&2; exit 1; }
+HOST_IP=$(docker run --rm --network kind alpine:3 getent ahostsv4 host.docker.internal 2>/dev/null | awk 'NR==1{print $1}' || true)
+if [ -z "$HOST_IP" ]; then
+  if [ "${BRICKIE_HATCHET_BIND:-127.0.0.1}" != 0.0.0.0 ]; then
+    echo "error: host.docker.internal does not resolve from the kind network; re-run with BRICKIE_HATCHET_BIND=0.0.0.0 so the cluster can reach Hatchet through the Docker bridge" >&2
+    exit 1
+  fi
+  HOST_IP=$(docker run --rm --network kind alpine:3 ip route | awk '/^default/{print $3}')
+fi
+[ -n "$HOST_IP" ] || { echo "error: cannot find the host's address from the kind network" >&2; exit 1; }
 kubectl apply -f hack/e2e-kind/brickie.yaml >/dev/null
 kubectl -n "$NS" create secret generic brickie-hatchet \
   --from-literal=HATCHET_CLIENT_TOKEN="$TOKEN" \
