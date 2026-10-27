@@ -28,7 +28,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  mirror:
+    uses: ./.github/workflows/mirror-sandboxd.yaml
+    permissions:
+      contents: read
+      packages: write
   demos:
+    needs: mirror
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
