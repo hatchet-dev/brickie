@@ -88,7 +88,10 @@ sandbox:
   egress: internet
 
   # Limits on every sandbox pod; the workspace volume has the same size limit
-  # as disk. An agent can exhaust its own sandbox, not the node.
+  # as disk. An agent can exhaust its own sandbox, not the node. cpu and
+  # memory are reserved on the node per sandbox pod; disk is a ceiling only
+  # (the pod requests 50Mi), so size node disks for the sandboxes you expect
+  # to be busy, not for every pod times disk.
   resources:
     cpu: "1"
     memory: 2Gi

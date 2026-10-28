@@ -357,11 +357,14 @@ func (d *Driver) podSpec(image string) corev1.PodSpec {
 				Command:         append([]string{"/brickie/sandboxd"}, sandboxd.Args(d.token, "127.0.0.1")...),
 				WorkingDir:      sandboxd.Workspace,
 				SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: &no},
-				Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
-					corev1.ResourceCPU:              d.opts.CPU,
-					corev1.ResourceMemory:           d.opts.Memory,
-					corev1.ResourceEphemeralStorage: d.opts.Disk,
-				}},
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceEphemeralStorage: resource.MustParse("50Mi")},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:              d.opts.CPU,
+						corev1.ResourceMemory:           d.opts.Memory,
+						corev1.ResourceEphemeralStorage: d.opts.Disk,
+					},
+				},
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: "brickie", MountPath: "/brickie", ReadOnly: true},
 					{Name: "workspace", MountPath: sandboxd.Workspace},

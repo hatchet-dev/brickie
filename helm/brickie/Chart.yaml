@@ -3,7 +3,7 @@ name: brickie
 description: Hatchet sandbox provider. Runs agent sandboxes as Hatchet tasks on Kubernetes, one isolated pod per sandbox, with agent-sandbox and Kata Containers bundled.
 type: application
 version: 0.1.0
-appVersion: "0.1.1"
+appVersion: "0.1.2"
 home: https://github.com/hatchet-dev/brickie
 sources:
   - https://github.com/hatchet-dev/brickie

@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-28
+
+### Changed
+
+- Kubernetes sandbox pods request 50Mi of ephemeral storage instead of the full `--sandbox-disk`, which stays the limit, so a sandbox no longer reserves 10Gi of node disk it does not use.
+
 ## [0.1.1] - 2026-10-27
 
 ### Added
