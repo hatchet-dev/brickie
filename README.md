@@ -74,15 +74,16 @@ Release binaries are built with the CMVP-certified Go Cryptographic Module and r
 
 ## Run on Kubernetes
 
-The Helm chart in `helm/brickie` installs the provider and everything it needs: agent-sandbox for sandbox pods and warm pools, Kata Containers (the default runtime, one micro-VM per sandbox), and the sandbox NetworkPolicy. All subcharts are bundled.
+The `brickie` chart in [hatchet-charts](https://github.com/hatchet-dev/hatchet-charts) installs the provider and everything it needs: agent-sandbox for sandbox pods and warm pools, Kata Containers (the default runtime, one micro-VM per sandbox), and the sandbox NetworkPolicy. All subcharts are bundled.
 
 ```bash
-helm upgrade --install brickie ./helm/brickie --namespace brickie --create-namespace \
+helm repo add hatchet https://hatchet-dev.github.io/hatchet-charts
+helm upgrade --install brickie hatchet/brickie --namespace brickie --create-namespace \
   --set hatchet.token=$HATCHET_CLIENT_TOKEN \
-  --set store=s3://my-bucket?prefix=brickie/
+  --set store='s3://my-bucket?prefix=brickie/'
 ```
 
-What to set up first (nodes with KVM, a bucket and its IAM role, a CNI that enforces NetworkPolicy, a Hatchet tenant with gRPC operators) is in [helm/brickie/README.md](helm/brickie/README.md).
+What to set up first (nodes with KVM, a bucket and its IAM role, a CNI that enforces NetworkPolicy, a Hatchet tenant with gRPC operators) is in the [chart README](https://github.com/hatchet-dev/hatchet-charts/blob/main/charts/brickie/README.md).
 
 ## Use an external Hatchet instance
 

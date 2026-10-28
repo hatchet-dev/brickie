@@ -19,7 +19,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 - Kubernetes driver (`--driver kubernetes`): every sandbox is an [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) claim bound from a pre-started warm pool per image, under the `kata-clh` or `gvisor` runtime class when the cluster has one (`--runtime`), with a NetworkPolicy that admits only the provider (`--provider-namespace`, `--provider-selector`) and bounds egress (`--sandbox-egress`), and CPU, memory, and disk limits per sandbox (`--sandbox-cpu`, `--sandbox-memory`, `--sandbox-disk`).
 - Mutual TLS between the provider and every Kubernetes sandbox: `brickie sandbox-tls` runs from the provider's own image (`--provider-image`) beside sandboxd in each pod and terminates TLS 1.3 on the pod IP, with a CA the provider keeps in its `brickie-sandboxd` Secret and a server certificate it issues into `brickie-sandbox-tls` and renews before expiry.
 - `hack/e2e-kind.sh` runs both demos against the Kubernetes driver on a local kind cluster.
-- Helm chart `helm/brickie`: the provider, the agent-sandbox controller and Kata Containers as bundled subcharts, an optional gVisor installer, and an egress allow-list for sandbox pods.
+- Helm chart `brickie` in [hatchet-charts](https://github.com/hatchet-dev/hatchet-charts): the provider, the agent-sandbox controller and Kata Containers as bundled subcharts, an optional gVisor installer, and an egress allow-list for sandbox pods.
 - The container image `ghcr.io/hatchet-dev/brickie`, for linux/amd64 and linux/arm64, built with the certified Go Cryptographic Module and published with every release.
 - `docs/SECURITY.md` describes the trust boundaries and the control that holds each one.
 
