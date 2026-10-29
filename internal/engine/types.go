@@ -21,6 +21,7 @@ const (
 	PresignFn = "$fs.presign"
 	CommandFn = "$command"
 	DestroyFn = "$destroy"
+	DeleteFn  = "$delete"
 )
 
 type TurnInput struct {

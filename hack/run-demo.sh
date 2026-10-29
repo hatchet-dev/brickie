@@ -190,7 +190,7 @@ EOF
 if [ "$DEMO" = fs-demo ]; then
   info "everything is ready — the file demo creates one sandbox and runs each file operation in it"
 else
-  info "everything is ready — the demo runs one durable agent-session task through create, exec, files, fork, kill, and connect"
+  info "everything is ready — the demo runs one durable agent-session task through create, exec, files, fork, kill, connect, and delete"
 fi
 printf '  $ %s\n' "cd examples/typescript && pnpm $DEMO"
 if [ "${BRICKIE_YES:-}" != "1" ] && [ -t 0 ]; then

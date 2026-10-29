@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+### Added
+
+- `$delete`: stops a sandbox and removes everything the store holds for it, metadata first so a concurrent `connect` finds no sandbox rather than an empty one. Idempotent, so a retry finishes a partial delete.
+
+### Changed
+
+- Snapshot ids are `<sandboxId>/<runId>` and stored results live under `results/<sandboxId>/`, so a sandbox's objects share one prefix. Snapshot ids from earlier releases still resolve. A turn in flight across the upgrade re-runs once if Hatchet retries it.
+
 ## [0.1.2] - 2026-10-28
 
 ### Changed

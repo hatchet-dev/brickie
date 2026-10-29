@@ -47,7 +47,7 @@ await again.exec('cat haiku.txt');
 ```
 
 - `hatchet.sandbox.create(options)` starts a sandbox. `connect(id)` continues one. `list({ metadata })` finds them.
-- `sandbox.exec(cmd, { timeoutMs })` runs a shell command. A timeout returns exit code 124. `sandbox.files` reads and writes files. `sandbox.kill()` removes the sandbox.
+- `sandbox.exec(cmd, { timeoutMs })` runs a shell command. A timeout returns exit code 124. `sandbox.files` reads and writes files. `sandbox.kill()` stops the sandbox and keeps its snapshots; `sandbox.delete()` and `hatchet.sandbox.delete({ metadata })` remove sandboxes with everything stored for them.
 - `files.read` and `files.write` carry up to `--max-file-bytes` (2 MiB) through a Hatchet task. Larger files go through the provider's `--store` and never enter Hatchet. On a laptop that is a directory (`file://`); in production, S3, GCS, or Azure Blob. `files.download` and `files.upload` move files between the workspace and an https URL. The sandbox needs no network for any of this.
 - In a durable task, each call is a step in the event log. Outside one, each call is a plain task run.
 
@@ -59,7 +59,7 @@ On a laptop, a sandbox is a plain container on the local Docker engine. Good for
 
 Each sandbox runs [`sandboxd`](https://github.com/kubernetes-sigs/agent-sandbox/blob/main/packages/sandboxd/USER_GUIDE.md), the agent-sandbox runtime daemon, as its process. The provider injects the binary and talks to it with a bearer token: commands over gRPC, files over REST. The daemon starts commands, streams their output, and kills the whole process group on a timeout. The image needs only `sh`, and `tar` for snapshots. On Kubernetes the daemon listens on loopback only and the provider's own image runs beside it in the pod as `brickie sandbox-tls`, so the provider and the sandbox talk over mutual TLS with certificates the provider issues; `--provider-image` names that image.
 
-No host environment variables reach a sandbox. The provider removes a sandbox after `--sandbox-idle-ttl` without a call, or after the `idleTimeoutMs` given at create. Its snapshots stay, so `connect` can bring it back.
+No host environment variables reach a sandbox. The provider removes a sandbox after `--sandbox-idle-ttl` without a call, or after the `idleTimeoutMs` given at create. Its snapshots stay, so `connect` can bring it back; only `delete` removes them.
 
 ## Run the provider
 

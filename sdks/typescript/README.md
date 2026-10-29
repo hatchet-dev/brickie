@@ -65,6 +65,7 @@ Your app only talks to Hatchet. A brickie provider, connected to the same tenant
 | `create(opts?)` | `Sandbox` | Starts a sandbox. |
 | `connect(id, { template? })` | `Sandbox` | Picks up a sandbox from its latest snapshot. Starts it again if it was stopped. Throws if the ID does not exist. |
 | `list({ sandboxId?, metadata? })` | `SandboxInfo[]` | Finds sandboxes by ID or by metadata. All given pairs must match. |
+| `delete({ sandboxId?, metadata? })` | `string[]` | Deletes every matching sandbox with all of its snapshots and files, and returns their IDs. One filter is required. |
 
 Options for `create`:
 
@@ -81,7 +82,8 @@ Options for `create`:
 | Call | Returns | What it does |
 |---|---|---|
 | `exec(cmd, { timeoutMs? })` | `{ stdout, stderr, exitCode, snapshotId?, timings? }` | Runs `sh -c cmd` in the workspace and takes a snapshot. A non-zero exit code is a normal result, not an error. On timeout the exit code is 124. |
-| `kill()` | `void` | Removes the sandbox. The snapshots stay, so `connect` still works. |
+| `kill()` | `void` | Stops the sandbox. The snapshots stay, so `connect` still works. |
+| `delete()` | `void` | Stops the sandbox and deletes every snapshot and file stored for it. `connect` fails afterwards. |
 | `sandboxId` | `string` | The ID to use with `connect` later. |
 | `files` | `Files` | The file API below. |
 

@@ -32,7 +32,7 @@ async function main() {
       step('read', JSON.stringify(await sandbox.files.read('b.txt')));
       step('files', (await sandbox.files.list()).map((e) => e.path).join(' '));
 
-      const fork = await hatchet.sandbox.create({ ...opts, from: hello.snapshotId });
+      const fork = await hatchet.sandbox.create({ ...opts, from: hello.snapshotId, metadata: { session: input.id, purpose: 'fork' } });
       const inFork = await fork.exec('ls');
       step('fork', `${fork.sandboxId} has ${inFork.stdout.split('\n').join(' ')} (no b.txt)`, inFork);
       await fork.kill();
@@ -43,6 +43,11 @@ async function main() {
       const back = await again.exec('cat a.txt b.txt');
       step('connect', `${again.sandboxId} from its latest snapshot: ${JSON.stringify(back.stdout)}`, back);
       await again.kill();
+
+      const deleted = await hatchet.sandbox.delete({ metadata: { session: input.id, purpose: 'fork' } });
+      const left = await hatchet.sandbox.list({ sandboxId: fork.sandboxId });
+      if (deleted[0] !== fork.sandboxId || left.length) throw new Error(`delete left ${fork.sandboxId}: ${JSON.stringify(left)}`);
+      step('delete', `${fork.sandboxId} and its snapshots removed; ${input.id} kept`);
 
       return { sandboxId: input.id, lastSnapshot: back.snapshotId };
     },
