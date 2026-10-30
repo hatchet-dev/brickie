@@ -264,7 +264,8 @@ func (d *Driver) Close() {
 func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.TurnResponse, error) {
 	if req.Fn == engine.DestroyFn {
 		if err := d.destroy(req.SandboxName); err != nil {
-			return engine.TurnResponse{}, fmt.Errorf("remove container %s: %w", req.SandboxName, err)
+			req.Logf("remove container %s failed: %v", req.SandboxName, err)
+			return engine.TurnResponse{}, fmt.Errorf("sandbox %s could not be stopped; see the provider log", req.SandboxID)
 		}
 		req.Logf("sandbox %s destroyed", req.SandboxName)
 		return engine.TurnResponse{Output: json.RawMessage(`{"destroyed":true}`)}, nil
