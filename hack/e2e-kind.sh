@@ -3,8 +3,11 @@ set -euo pipefail
 
 # End-to-end check of the Kubernetes driver on a local kind cluster: Hatchet
 # runs on the host with docker compose, the provider runs in the cluster, and
-# both demos run from this machine. Needs Docker, kind, kubectl, node, and
-# pnpm. Safe to re-run; steps that already hold are skipped.
+# both demos run from this machine. The cluster has a worker that is labelled
+# and tainted for sandboxes, so sandbox pods must carry the provider's node
+# selector and toleration to schedule at all, while the provider and the
+# controller stay on the untainted nodes. Needs Docker, kind, kubectl, node,
+# and pnpm. Safe to re-run; steps that already hold are skipped.
 #
 # The cluster reaches Hatchet through host.docker.internal on Docker Desktop.
 # On Docker Engine (Linux, CI) that name does not resolve, so run with
@@ -46,9 +49,12 @@ TOKEN=$(grep '^HATCHET_CLIENT_TOKEN=' .env | head -1 | cut -d= -f2-)
 ok "token is in .env"
 
 step "kind cluster $CLUSTER"
-kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" --wait 120s
+kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" --config hack/e2e-kind/kind.yaml --wait 120s
 kubectl config use-context "kind-$CLUSTER" >/dev/null
-ok "cluster is up"
+SANDBOX_NODE=$(kubectl get nodes -l brickie.hatchet.run/sandbox-node=true -o name | head -1)
+[ -n "$SANDBOX_NODE" ] || { echo "error: the cluster has no sandbox worker; it was created by an older run, so run 'hack/e2e-kind.sh down' first" >&2; exit 1; }
+kubectl taint node "${SANDBOX_NODE#node/}" brickie.hatchet.run/sandbox=true:NoSchedule --overwrite >/dev/null
+ok "cluster is up; ${SANDBOX_NODE#node/} is labelled and tainted for sandboxes only"
 
 step "agent-sandbox controller v1.0.8"
 kubectl apply --server-side -f "$AGENT_SANDBOX" >/dev/null
@@ -105,7 +111,9 @@ warm_ready || {
   kubectl -n "$NS" describe pods -l agents.x-k8s.io/warm-pool-sandbox | sed -n '/^Events:/,$p' >&2
   exit 1
 }
-ok "a warm sandbox pod is ready (sandboxd behind brickie sandbox-tls)"
+WARM_NODE=$(kubectl -n "$NS" get pods -l agents.x-k8s.io/warm-pool-sandbox -o jsonpath='{.items[0].spec.nodeName}')
+[ "node/$WARM_NODE" = "$SANDBOX_NODE" ] || { echo "error: warm sandbox pod landed on $WARM_NODE, not the tainted sandbox node" >&2; exit 1; }
+ok "a warm sandbox pod is ready on $WARM_NODE (sandboxd behind brickie sandbox-tls)"
 
 step "demos"
 set -a
