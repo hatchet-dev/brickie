@@ -21,6 +21,7 @@ const (
 	PresignFn = "$fs.presign"
 	CommandFn = "$command"
 	DestroyFn = "$destroy"
+	DeleteFn  = "$delete"
 )
 
 type TurnInput struct {
@@ -31,6 +32,9 @@ type TurnInput struct {
 	SnapshotID string            `json:"snapshotId,omitempty"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
 	IdleTTLMs  int64             `json:"idleTtlMs,omitempty"`
+	// InheritMetadata copies the metadata of the sandbox that made SnapshotID
+	// onto the new sandbox; pairs in Metadata win.
+	InheritMetadata bool `json:"inheritMetadata,omitempty"`
 }
 
 type TurnResult struct {

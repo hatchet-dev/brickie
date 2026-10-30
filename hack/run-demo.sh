@@ -11,7 +11,8 @@ DEMO=demo
 case "${1:-}" in
   "") ;;
   fs) DEMO=fs-demo ;;
-  *) echo "usage: hack/run-demo.sh [fs]" >&2; exit 1 ;;
+  up) DEMO="" ;;
+  *) echo "usage: hack/run-demo.sh [fs|up]" >&2; exit 1 ;;
 esac
 
 TENANT_ID=707d0855-80ab-4e1f-a156-f1c4546cbf52
@@ -187,10 +188,12 @@ cat <<EOF
 
 EOF
 
-if [ "$DEMO" = fs-demo ]; then
+if [ -z "$DEMO" ]; then
+  exit 0
+elif [ "$DEMO" = fs-demo ]; then
   info "everything is ready — the file demo creates one sandbox and runs each file operation in it"
 else
-  info "everything is ready — the demo runs one durable agent-session task through create, exec, files, fork, kill, and connect"
+  info "everything is ready — the demo runs one durable agent-session task through create, exec, files, fork, kill, connect, and delete"
 fi
 printf '  $ %s\n' "cd examples/typescript && pnpm $DEMO"
 if [ "${BRICKIE_YES:-}" != "1" ] && [ -t 0 ]; then

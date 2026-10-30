@@ -12,6 +12,7 @@ interface TurnInput extends JsonObject {
   snapshotId?: string;
   metadata?: Record<string, string>;
   idleTtlMs?: number;
+  inheritMetadata?: boolean;
 }
 
 interface TurnResult extends JsonObject {
@@ -46,6 +47,8 @@ export interface SandboxOpts {
   metadata?: Record<string, string>;
   /** Milliseconds without a turn before the provider removes the sandbox. Capped by the provider. */
   idleTimeoutMs?: number;
+  /** With `from`, start from the metadata of the sandbox that made that snapshot. Pairs given in `metadata` take precedence over inherited ones. */
+  inheritParentMetadata?: boolean;
 }
 
 export interface ExecOpts {
@@ -117,6 +120,7 @@ export class Sandbox {
       ...(opts.from ? { snapshotId: opts.from } : {}),
       ...(opts.metadata ? { metadata: opts.metadata } : {}),
       ...(opts.idleTimeoutMs ? { idleTtlMs: opts.idleTimeoutMs } : {}),
+      ...(opts.inheritParentMetadata ? { inheritMetadata: true } : {}),
     });
     return new Sandbox(run, created.sandboxId, opts.template);
   }
@@ -139,6 +143,18 @@ export class Sandbox {
     return raw.map((s) => ({ ...s, createdAt: new Date(s.createdAt), lastUsed: s.lastUsed ? new Date(s.lastUsed) : undefined }));
   }
 
+  /** Deletes every sandbox matching the filter, with all their snapshots and files. Prefer `hatchet.sandbox.delete`. */
+  static async delete(client: HatchetClient, opts: SandboxListOpts): Promise<string[]> {
+    if (!opts.sandboxId && Object.keys(opts.metadata ?? {}).length === 0) throw new Error('delete needs a sandboxId or a metadata filter');
+    const run = turnRunner(client);
+    const ids: string[] = [];
+    for (const { sandboxId } of await Sandbox.list(client, opts)) {
+      await run({ fn: '$delete', input: {}, sandboxId });
+      ids.push(sandboxId);
+    }
+    return ids;
+  }
+
   /** Runs a shell command with `sh -c` in the workspace and makes a snapshot. A timeout gives `exitCode` 124, not an error. */
   async exec(cmd: string, opts: ExecOpts = {}): Promise<CommandResult> {
     return this.turn<CommandResult>('$command', { cmd, ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}) });
@@ -147,6 +163,11 @@ export class Sandbox {
   /** Removes the sandbox. Its snapshots stay; `connect` can bring it back. */
   async kill(): Promise<void> {
     await this.turn('$destroy', {});
+  }
+
+  /** Removes the sandbox and deletes every snapshot and file the provider stored for it. `connect` fails afterwards. */
+  async delete(): Promise<void> {
+    await this.turn('$delete', {});
   }
 
   private async turn<T = JsonObject>(fn: string, input: JsonObject): Promise<T> {
@@ -168,6 +189,8 @@ export interface SandboxNamespace {
   connect(sandboxId: string, opts?: ConnectOpts): Promise<Sandbox>;
   /** Lists sandboxes the provider knows, filtered by ID or metadata. */
   list(opts?: SandboxListOpts): Promise<SandboxInfo[]>;
+  /** Deletes the sandboxes matching the filter, with every snapshot and file stored for them. Returns their IDs. */
+  delete(opts: SandboxListOpts): Promise<string[]>;
 }
 
 declare module '@hatchet-dev/typescript-sdk/v1' {
@@ -183,6 +206,7 @@ Object.defineProperty(HatchetClient.prototype, 'sandbox', {
       create: (opts) => Sandbox.create(this, opts),
       connect: (sandboxId, opts) => Sandbox.connect(this, sandboxId, opts),
       list: (opts) => Sandbox.list(this, opts),
+      delete: (opts) => Sandbox.delete(this, opts),
     };
   },
 });

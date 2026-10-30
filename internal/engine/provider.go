@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"strings"
 	"sync"
@@ -118,6 +119,13 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 	if input.Image == "" {
 		input.Image = r.opts.DefaultImage
 	}
+	lockID := input.SandboxID
+	if lockID == "" {
+		lockID = runID
+	}
+	mu := r.lock(lockID)
+	mu.Lock()
+	defer mu.Unlock()
 	sandboxID, meta, err := r.resolveSandbox(ctx, &input, runID)
 	if err != nil {
 		return TurnResult{}, err
@@ -137,10 +145,11 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		Log:         log,
 	}
 	req.Logf("turn start: fn=%s image=%s sandbox=%s snapshot=%s", input.Fn, input.Image, req.SandboxName, orNone(input.SnapshotID))
-	mu := r.lock(sandboxID)
-	mu.Lock()
-	defer mu.Unlock()
-	done, prev, err := r.opts.Store.Result(ctx, runID)
+	if input.Fn == DeleteFn {
+		return r.delete(ctx, req)
+	}
+	snapID := sandboxID + "/" + runID
+	done, prev, err := r.opts.Store.Result(ctx, snapID)
 	switch {
 	case err == nil:
 		latest, err := r.opts.Store.Latest(ctx, sandboxID)
@@ -149,14 +158,14 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		}
 		switch latest {
 		case prev:
-			req.Logf("turn already ran and stored snapshot %s: publishing it again", runID)
-			if err := r.publish(ctx, sandboxID, runID); err != nil {
+			req.Logf("turn already ran and stored snapshot %s: publishing it again", snapID)
+			if err := r.publish(ctx, sandboxID, snapID); err != nil {
 				return TurnResult{}, err
 			}
-		case runID:
-			req.Logf("turn already ran and published snapshot %s", runID)
+		case snapID:
+			req.Logf("turn already ran and published snapshot %s", snapID)
 		default:
-			req.Logf("turn already ran; a later turn published %s, so snapshot %s stays unpublished", latest, runID)
+			req.Logf("turn already ran; a later turn published %s, so snapshot %s stays unpublished", latest, snapID)
 		}
 		return done, nil
 	case !IsNotFound(err):
@@ -175,7 +184,7 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		req.Snapshot, req.SnapshotSize = rd, rd.Size()
 		req.Logf("loaded snapshot %s (%d bytes)", input.SnapshotID, rd.Size())
 	}
-	cp := &checkpoint{store: r.opts.Store, id: runID, limit: r.opts.MaxSnapshotBytes}
+	cp := &checkpoint{store: r.opts.Store, id: snapID, limit: r.opts.MaxSnapshotBytes}
 	cp.ctx, cp.cancel = context.WithCancel(ctx)
 	defer cp.cancel()
 	req.Checkpoint = cp
@@ -203,21 +212,38 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		return TurnResult{Output: resp.Output, SandboxID: sandboxID, Timings: resp.Timings}, nil
 	}
 	if err := cp.commit(); err != nil {
-		req.Logf("write snapshot %s failed: %v", runID, err)
-		return TurnResult{}, fmt.Errorf("write snapshot %s: %w", runID, err)
+		req.Logf("write snapshot %s failed: %v", snapID, err)
+		return TurnResult{}, fmt.Errorf("write snapshot %s: %w", snapID, err)
 	}
-	req.Logf("snapshot %s stored (%d bytes)", runID, cp.written)
-	done = TurnResult{Output: resp.Output, SandboxID: sandboxID, SnapshotID: runID, Timings: resp.Timings}
-	if err := r.opts.Store.SetResult(ctx, runID, done, prev); err != nil {
+	req.Logf("snapshot %s stored (%d bytes)", snapID, cp.written)
+	done = TurnResult{Output: resp.Output, SandboxID: sandboxID, SnapshotID: snapID, Timings: resp.Timings}
+	if err := r.opts.Store.SetResult(ctx, snapID, done, prev); err != nil {
 		req.Logf("record turn result failed: %v", err)
 		return TurnResult{}, fmt.Errorf("record result of turn %s: %w", runID, err)
 	}
-	if err := r.publish(ctx, sandboxID, runID); err != nil {
+	if err := r.publish(ctx, sandboxID, snapID); err != nil {
 		req.Logf("%v", err)
 		return TurnResult{}, err
 	}
-	req.Logf("turn done: snapshot=%s", runID)
+	req.Logf("turn done: snapshot=%s", snapID)
 	return done, nil
+}
+
+// delete stops the sandbox and removes everything the store holds for it.
+// Every step is idempotent, so a retry finishes a delete that failed part way
+// and deleting an unknown sandbox succeeds.
+func (r *turnRunner) delete(ctx context.Context, req TurnRequest) (TurnResult, error) {
+	req.Fn = DestroyFn
+	if _, err := r.opts.Driver.RunTurn(ctx, req); err != nil {
+		req.Logf("stop sandbox %s for delete failed: %v", req.SandboxID, err)
+		return TurnResult{}, fmt.Errorf("delete sandbox %s: the sandbox could not be stopped; see the provider log", req.SandboxID)
+	}
+	if err := r.opts.Store.DeleteSandbox(ctx, req.SandboxID); err != nil {
+		req.Logf("delete sandbox %s from the store failed: %v", req.SandboxID, err)
+		return TurnResult{}, fmt.Errorf("delete sandbox %s: the store refused; see the provider log", req.SandboxID)
+	}
+	req.Logf("sandbox %s deleted with its snapshots", req.SandboxID)
+	return TurnResult{Output: json.RawMessage(`{"deleted":true}`), SandboxID: req.SandboxID}, nil
 }
 
 var sandboxIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
@@ -237,7 +263,18 @@ func (r *turnRunner) resolveSandbox(ctx context.Context, input *TurnInput, runID
 		if ttl > r.opts.MaxIdleTTL {
 			return "", SandboxMeta{}, fmt.Errorf("idle ttl %s exceeds the provider maximum %s", ttl, r.opts.MaxIdleTTL)
 		}
-		return id, SandboxMeta{SandboxID: id, Metadata: input.Metadata, IdleTTL: ttl, CreatedAt: time.Now()}, nil
+		metadata := input.Metadata
+		if input.InheritMetadata && input.SnapshotID != "" {
+			parentID, _, _ := strings.Cut(input.SnapshotID, "/")
+			parent, err := r.opts.Store.Meta(ctx, parentID)
+			if err != nil {
+				return "", SandboxMeta{}, fmt.Errorf("inherit metadata: the sandbox %s that made snapshot %s is unknown", parentID, input.SnapshotID)
+			}
+			metadata = map[string]string{}
+			maps.Copy(metadata, parent.Metadata)
+			maps.Copy(metadata, input.Metadata)
+		}
+		return id, SandboxMeta{SandboxID: id, Metadata: metadata, IdleTTL: ttl, CreatedAt: time.Now()}, nil
 	case ConnectFn:
 		if id == "" {
 			return "", SandboxMeta{}, errors.New("connect needs a sandbox id")

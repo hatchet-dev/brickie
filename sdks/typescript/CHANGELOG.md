@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-29
+
+### Added
+
+- `create({ from, inheritParentMetadata: true })` copies the parent sandbox's metadata onto the fork; tags given in `metadata` take precedence.
+- `hatchet.sandbox.delete({ sandboxId?, metadata? })` and `sandbox.delete()`: remove sandboxes together with every snapshot and file stored for them. `kill()` keeps snapshots as before.
+
 ### Fixed
 
 - `files.read` of a staged file replayed in a durable task after its signed URL expired now asks the provider to sign the same file again instead of failing with `staging_failed`.

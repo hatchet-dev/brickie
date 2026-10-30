@@ -116,7 +116,7 @@ func (d *Driver) createContainer(ctx context.Context, name, image string) (*sand
 	if err := d.ensureImage(ctx, image); err != nil {
 		return nil, err
 	}
-	d.removeContainer(ctx, name)
+	_ = d.removeContainer(ctx, name)
 	useInit := true
 	loopback := netip.MustParseAddr("127.0.0.1")
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
@@ -143,7 +143,7 @@ func (d *Driver) createContainer(ctx context.Context, name, image string) (*sand
 	}
 	c, err := d.connect(ctx, created.ID)
 	if err != nil {
-		d.removeContainer(ctx, name)
+		_ = d.removeContainer(ctx, name)
 		return nil, fmt.Errorf("sandbox %s: %w", name, err)
 	}
 	return c, nil
@@ -170,8 +170,12 @@ func (d *Driver) connect(ctx context.Context, containerID string) (*sandboxd.Cli
 	return sandboxd.Dial(ctx, grpcAddr, restAddr, d.token, nil)
 }
 
-func (d *Driver) removeContainer(ctx context.Context, name string) {
-	_, _ = d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true})
+func (d *Driver) removeContainer(ctx context.Context, name string) error {
+	_, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true})
+	if cerrdefs.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func (d *Driver) acquire(ctx context.Context, name, image string, ttl time.Duration) (*liveSandbox, bool, error) {
@@ -198,15 +202,15 @@ func (d *Driver) lookup(name string) *liveSandbox {
 	return d.live[name]
 }
 
-func (d *Driver) destroy(name string) {
+func (d *Driver) destroy(name string) error {
 	d.mu.Lock()
 	sb, ok := d.live[name]
 	delete(d.live, name)
 	d.mu.Unlock()
-	d.removeContainer(context.Background(), name)
 	if ok {
 		sb.client.Close()
 	}
+	return d.removeContainer(context.Background(), name)
 }
 
 func (d *Driver) reap() {
@@ -225,7 +229,7 @@ func (d *Driver) reap() {
 		for name, sb := range idle {
 			sb.mu.Lock()
 			if time.Since(sb.lastUsed) > sb.ttl {
-				d.destroy(name)
+				_ = d.destroy(name)
 			}
 			sb.mu.Unlock()
 		}
@@ -252,14 +256,17 @@ func (d *Driver) Close() {
 	}
 	d.mu.Unlock()
 	for _, name := range names {
-		d.destroy(name)
+		_ = d.destroy(name)
 	}
 }
 
 // RunTurn executes one turn in the named sandbox; create and connect start it, other turns need it running.
 func (d *Driver) RunTurn(ctx context.Context, req engine.TurnRequest) (engine.TurnResponse, error) {
 	if req.Fn == engine.DestroyFn {
-		d.destroy(req.SandboxName)
+		if err := d.destroy(req.SandboxName); err != nil {
+			req.Logf("remove container %s failed: %v", req.SandboxName, err)
+			return engine.TurnResponse{}, fmt.Errorf("sandbox %s could not be stopped; see the provider log", req.SandboxID)
+		}
 		req.Logf("sandbox %s destroyed", req.SandboxName)
 		return engine.TurnResponse{Output: json.RawMessage(`{"destroyed":true}`)}, nil
 	}

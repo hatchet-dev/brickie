@@ -65,6 +65,7 @@ Your app only talks to Hatchet. A brickie provider, connected to the same tenant
 | `create(opts?)` | `Sandbox` | Starts a sandbox. |
 | `connect(id, { template? })` | `Sandbox` | Picks up a sandbox from its latest snapshot. Starts it again if it was stopped. Throws if the ID does not exist. |
 | `list({ sandboxId?, metadata? })` | `SandboxInfo[]` | Finds sandboxes by ID or by metadata. All given pairs must match. |
+| `delete({ sandboxId?, metadata? })` | `string[]` | Deletes every matching sandbox with all of its snapshots and files, and returns their IDs. One filter is required. |
 
 Options for `create`:
 
@@ -74,6 +75,7 @@ Options for `create`:
 | `template` | The container image. Defaults to the provider's image. |
 | `from` | Start from this snapshot. Create two sandboxes from the same snapshot and you have a fork. |
 | `metadata` | Tags you can search for with `list`. |
+| `inheritParentMetadata` | With `from`, copy the tags of the sandbox that made the snapshot onto the new one. Tags given in `metadata` take precedence. |
 | `idleTimeoutMs` | Remove the sandbox after this long with no calls. The provider sets the maximum. |
 
 ### `Sandbox`
@@ -81,7 +83,8 @@ Options for `create`:
 | Call | Returns | What it does |
 |---|---|---|
 | `exec(cmd, { timeoutMs? })` | `{ stdout, stderr, exitCode, snapshotId?, timings? }` | Runs `sh -c cmd` in the workspace and takes a snapshot. A non-zero exit code is a normal result, not an error. On timeout the exit code is 124. |
-| `kill()` | `void` | Removes the sandbox. The snapshots stay, so `connect` still works. |
+| `kill()` | `void` | Stops the sandbox. The snapshots stay, so `connect` still works. |
+| `delete()` | `void` | Stops the sandbox and deletes every snapshot and file stored for it. `connect` fails afterwards. |
 | `sandboxId` | `string` | The ID to use with `connect` later. |
 | `files` | `Files` | The file API below. |
 
@@ -110,6 +113,7 @@ The sandbox itself does not need network access for any of this.
 - `FilesystemError` has a `code`. One of: `not_found`, `invalid_path`, `invalid_url`, `invalid_content`, `invalid`, `is_a_directory`, `not_a_directory`, `too_large`, `staging_failed`, `transfer_failed`.
 - A command that fails does not throw. Look at `exitCode`.
 - `connect` with an unknown ID throws. `create` with an `id` that already exists throws too. Use `connect` for that one, or pick a new ID.
+- `hatchet.sandbox.delete` without a `sandboxId` or a non-empty `metadata` filter throws before touching anything. Metadata matching is a subset match, the same as `list`: a filter of `{ a, b }` matches a sandbox tagged `{ a, b, c }`.
 
 ## Telemetry
 

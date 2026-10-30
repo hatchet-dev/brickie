@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -73,7 +74,15 @@ func (s *Store) Close() error { return s.bucket.Close() }
 // Local reports a file:// store, which only the provider's own machine can reach.
 func (s *Store) Local() bool { return s.dir != "" }
 
+// A snapshot id is <sandboxID>/<runID>. Bare run ids from before sandboxes
+// owned their snapshots are refused, so a deleted sandbox cannot be restored
+// from an object that deletion could not find.
+var snapshotIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}/[0-9a-f-]+$`)
+
 func (s *Store) OpenSnapshot(ctx context.Context, id string) (*blob.Reader, error) {
+	if !snapshotIDRe.MatchString(id) {
+		return nil, fmt.Errorf("invalid snapshot id %q", id)
+	}
 	return s.bucket.NewReader(ctx, "snapshots/"+id+".tar.gz", nil)
 }
 
@@ -157,6 +166,34 @@ func (s *Store) SetResult(ctx context.Context, runID string, result TurnResult, 
 		return err
 	}
 	return s.bucket.WriteAll(ctx, "results/"+runID+".json", b, nil)
+}
+
+// DeleteSandbox removes everything the store holds for a sandbox: the
+// metadata first, so a connect in the meantime finds no sandbox rather than an
+// empty one, then the pointer, then the per-sandbox prefixes. Missing objects
+// are not errors, so a retry completes a delete that failed part way.
+func (s *Store) DeleteSandbox(ctx context.Context, sandboxID string) error {
+	for _, key := range []string{"meta/" + sandboxID + ".json", "latest/" + sandboxID} {
+		if err := s.bucket.Delete(ctx, key); err != nil && !IsNotFound(err) {
+			return err
+		}
+	}
+	for _, prefix := range []string{"snapshots/", "results/", "staging/"} {
+		iter := s.bucket.List(&blob.ListOptions{Prefix: prefix + sandboxID + "/"})
+		for {
+			obj, err := iter.Next(ctx)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return err
+			}
+			if err := s.bucket.Delete(ctx, obj.Key); err != nil && !IsNotFound(err) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Prune deletes the provider's own objects older than maxAge and leaves the

@@ -19,7 +19,7 @@ async function main() {
     executionTimeout: '30m',
     fn: async (input: { id: string }) => {
       const started = Date.now();
-      const sandbox = await hatchet.sandbox.create({ ...opts, id: input.id, metadata: { tenant: 'acme', purpose: 'demo' } });
+      const sandbox = await hatchet.sandbox.create({ ...opts, id: input.id, metadata: { tenant: 'acme', session: input.id, purpose: 'demo' } });
       step('create', sandbox.sandboxId, { timings: { claim: Date.now() - started } });
       const found = await hatchet.sandbox.list({ metadata: { tenant: 'acme' } });
       step('list', found.map((s) => `${s.sandboxId}${s.live ? ' (live)' : ''}`).join(' '));
@@ -32,7 +32,7 @@ async function main() {
       step('read', JSON.stringify(await sandbox.files.read('b.txt')));
       step('files', (await sandbox.files.list()).map((e) => e.path).join(' '));
 
-      const fork = await hatchet.sandbox.create({ ...opts, from: hello.snapshotId });
+      const fork = await hatchet.sandbox.create({ ...opts, from: hello.snapshotId, inheritParentMetadata: true, metadata: { purpose: 'fork' } });
       const inFork = await fork.exec('ls');
       step('fork', `${fork.sandboxId} has ${inFork.stdout.split('\n').join(' ')} (no b.txt)`, inFork);
       await fork.kill();
@@ -43,6 +43,9 @@ async function main() {
       const back = await again.exec('cat a.txt b.txt');
       step('connect', `${again.sandboxId} from its latest snapshot: ${JSON.stringify(back.stdout)}`, back);
       await again.kill();
+
+      const deleted = await hatchet.sandbox.delete({ metadata: { session: input.id, purpose: 'fork' } });
+      step('delete', `${deleted.join(' ')} with its snapshots; ${input.id} kept`);
 
       return { sandboxId: input.id, lastSnapshot: back.snapshotId };
     },

@@ -1,0 +1,55 @@
+name: e2e-typescript
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/e2e-typescript.yaml"
+      - "cmd/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+      - "sdks/typescript/**"
+      - "pnpm-lock.yaml"
+      - "hack/run-demo.sh"
+      - "docker-compose.yml"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-typescript-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdk:
+    runs-on: ubicloud-standard-4
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.33.2
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: CGO_ENABLED=0 go build -o bin/brickie ./cmd/brickie
+      - name: Start Hatchet and the provider on the Docker driver
+        run: hack/run-demo.sh up
+        env:
+          BRICKIE_YES: "1"
+      - name: SDK end-to-end tests
+        run: |
+          set -a; . ./.env; set +a
+          pnpm --filter @hatchet-dev/sandbox test
+      - name: Provider log
+        if: always()
+        run: cat ~/.brickie/provider.log || true

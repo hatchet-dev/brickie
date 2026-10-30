@@ -25,7 +25,7 @@ cd examples/typescript && pnpm install && pnpm typecheck
 
 Build binaries to /tmp or use `go install`, do not commit binaries.
 
-CI runs both demos end to end on every pull request: `.github/workflows/e2e-docker.yaml` on the Docker driver (`hack/run-demo.sh`) and `.github/workflows/e2e-kind.yaml` on the Kubernetes driver (`hack/e2e-kind.sh` on a kind cluster). Each first calls `mirror-sandboxd.yaml`, which copies the pinned sandboxd digest into `ghcr.io/hatchet-dev/sandboxd` if it is not there yet. The kind node pulls that image without credentials, so the package has to be public.
+CI runs both demos end to end on every pull request: `.github/workflows/e2e-docker.yaml` on the Docker driver (`hack/run-demo.sh`) and `.github/workflows/e2e-kind.yaml` on the Kubernetes driver (`hack/e2e-kind.sh` on a kind cluster). `.github/workflows/e2e-typescript.yaml` runs the SDK's test suite (`sdks/typescript/test`, `pnpm test`) against a provider started with `hack/run-demo.sh up`; the demos stay simple and the concept checks live in that suite. Each first calls `mirror-sandboxd.yaml`, which copies the pinned sandboxd digest into `ghcr.io/hatchet-dev/sandboxd` if it is not there yet. The kind node pulls that image without credentials, so the package has to be public.
 
 ## Rules
 

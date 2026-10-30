@@ -1,6 +1,6 @@
 {
   "name": "@hatchet-dev/sandbox",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Hatchet Sandbox TypeScript SDK",
   "license": "MIT",
   "repository": {
@@ -27,7 +27,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc",
-    "docs": "typedoc"
+    "docs": "typedoc",
+    "test": "node --import tsx --test --test-force-exit --test-timeout=180000 test/e2e.test.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
@@ -42,6 +43,7 @@
   "devDependencies": {
     "@hatchet-dev/typescript-sdk": "^1.33.1",
     "@types/node": "^24.0.0",
+    "tsx": "^4.23.15",
     "typedoc": "^0.28.0",
     "typescript": "^5.9.0"
   }
