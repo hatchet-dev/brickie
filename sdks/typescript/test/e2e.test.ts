@@ -1,17 +1,17 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
-import { HatchetClient } from '@hatchet-dev/typescript-sdk/v1';
+import { HatchetClient, type JsonObject } from '@hatchet-dev/typescript-sdk/v1';
 import '../src/index.js';
 
 const hatchet = HatchetClient.init();
 const template = process.env.DEMO_TEMPLATE ?? 'alpine:3';
 const log = (...parts: unknown[]) => console.log('   ', ...parts);
 
-const task = hatchet.workflow<Record<string, unknown>, Record<string, { output: Record<string, unknown> }>>({ name: 'brickie-sandbox' });
-const rawTurn = async (fn: string, sandboxId: string, extra: Record<string, unknown> = {}) => {
+const task = hatchet.workflow<JsonObject, Record<string, { output: JsonObject }>>({ name: 'brickie-sandbox' });
+const rawTurn = async (fn: string, sandboxId: string, extra: JsonObject = {}) => {
   const r = await task.run({ fn, input: {}, sandboxId, image: template, ...extra });
-  return (r['brickie-sandbox'] ?? r) as { output: Record<string, unknown> };
+  return (r['brickie-sandbox'] ?? r) as { output: JsonObject };
 };
 
 const session = `t-${randomUUID().slice(0, 8)}`;

@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-30
+
 ### Added
 
 - `$create` with `inheritMetadata` starts a fork from the metadata of the sandbox that made its snapshot; pairs given with the create take precedence.
