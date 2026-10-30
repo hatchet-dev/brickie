@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"strings"
 	"sync"
@@ -118,6 +119,13 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 	if input.Image == "" {
 		input.Image = r.opts.DefaultImage
 	}
+	lockID := input.SandboxID
+	if lockID == "" {
+		lockID = runID
+	}
+	mu := r.lock(lockID)
+	mu.Lock()
+	defer mu.Unlock()
 	sandboxID, meta, err := r.resolveSandbox(ctx, &input, runID)
 	if err != nil {
 		return TurnResult{}, err
@@ -137,9 +145,6 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 		Log:         log,
 	}
 	req.Logf("turn start: fn=%s image=%s sandbox=%s snapshot=%s", input.Fn, input.Image, req.SandboxName, orNone(input.SnapshotID))
-	mu := r.lock(sandboxID)
-	mu.Lock()
-	defer mu.Unlock()
 	if input.Fn == DeleteFn {
 		return r.delete(ctx, req)
 	}
@@ -230,10 +235,12 @@ func (r *turnRunner) run(ctx context.Context, runID string, input TurnInput, log
 func (r *turnRunner) delete(ctx context.Context, req TurnRequest) (TurnResult, error) {
 	req.Fn = DestroyFn
 	if _, err := r.opts.Driver.RunTurn(ctx, req); err != nil {
-		return TurnResult{}, err
+		req.Logf("stop sandbox %s for delete failed: %v", req.SandboxID, err)
+		return TurnResult{}, fmt.Errorf("delete sandbox %s: the sandbox could not be stopped; see the provider log", req.SandboxID)
 	}
 	if err := r.opts.Store.DeleteSandbox(ctx, req.SandboxID); err != nil {
-		return TurnResult{}, fmt.Errorf("delete sandbox %s: %w", req.SandboxID, err)
+		req.Logf("delete sandbox %s from the store failed: %v", req.SandboxID, err)
+		return TurnResult{}, fmt.Errorf("delete sandbox %s: the store refused; see the provider log", req.SandboxID)
 	}
 	req.Logf("sandbox %s deleted with its snapshots", req.SandboxID)
 	return TurnResult{Output: json.RawMessage(`{"deleted":true}`), SandboxID: req.SandboxID}, nil
@@ -256,7 +263,18 @@ func (r *turnRunner) resolveSandbox(ctx context.Context, input *TurnInput, runID
 		if ttl > r.opts.MaxIdleTTL {
 			return "", SandboxMeta{}, fmt.Errorf("idle ttl %s exceeds the provider maximum %s", ttl, r.opts.MaxIdleTTL)
 		}
-		return id, SandboxMeta{SandboxID: id, Metadata: input.Metadata, IdleTTL: ttl, CreatedAt: time.Now()}, nil
+		metadata := input.Metadata
+		if input.InheritMetadata && input.SnapshotID != "" {
+			parentID, _, _ := strings.Cut(input.SnapshotID, "/")
+			parent, err := r.opts.Store.Meta(ctx, parentID)
+			if err != nil {
+				return "", SandboxMeta{}, fmt.Errorf("inherit metadata: the sandbox %s that made snapshot %s is unknown", parentID, input.SnapshotID)
+			}
+			metadata = map[string]string{}
+			maps.Copy(metadata, parent.Metadata)
+			maps.Copy(metadata, input.Metadata)
+		}
+		return id, SandboxMeta{SandboxID: id, Metadata: metadata, IdleTTL: ttl, CreatedAt: time.Now()}, nil
 	case ConnectFn:
 		if id == "" {
 			return "", SandboxMeta{}, errors.New("connect needs a sandbox id")

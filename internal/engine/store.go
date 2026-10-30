@@ -74,9 +74,10 @@ func (s *Store) Close() error { return s.bucket.Close() }
 // Local reports a file:// store, which only the provider's own machine can reach.
 func (s *Store) Local() bool { return s.dir != "" }
 
-// A snapshot id is <sandboxID>/<runID>, or a bare run id from before sandboxes
-// owned their snapshots.
-var snapshotIDRe = regexp.MustCompile(`^([a-z0-9][a-z0-9-]{0,62}/)?[0-9a-f-]+$`)
+// A snapshot id is <sandboxID>/<runID>. Bare run ids from before sandboxes
+// owned their snapshots are refused, so a deleted sandbox cannot be restored
+// from an object that deletion could not find.
+var snapshotIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}/[0-9a-f-]+$`)
 
 func (s *Store) OpenSnapshot(ctx context.Context, id string) (*blob.Reader, error) {
 	if !snapshotIDRe.MatchString(id) {

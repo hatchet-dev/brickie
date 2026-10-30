@@ -12,6 +12,7 @@ interface TurnInput extends JsonObject {
   snapshotId?: string;
   metadata?: Record<string, string>;
   idleTtlMs?: number;
+  inheritMetadata?: boolean;
 }
 
 interface TurnResult extends JsonObject {
@@ -46,6 +47,8 @@ export interface SandboxOpts {
   metadata?: Record<string, string>;
   /** Milliseconds without a turn before the provider removes the sandbox. Capped by the provider. */
   idleTimeoutMs?: number;
+  /** With `from`, start from the metadata of the sandbox that made that snapshot. Pairs given in `metadata` take precedence over inherited ones. */
+  inheritParentMetadata?: boolean;
 }
 
 export interface ExecOpts {
@@ -117,6 +120,7 @@ export class Sandbox {
       ...(opts.from ? { snapshotId: opts.from } : {}),
       ...(opts.metadata ? { metadata: opts.metadata } : {}),
       ...(opts.idleTimeoutMs ? { idleTtlMs: opts.idleTimeoutMs } : {}),
+      ...(opts.inheritParentMetadata ? { inheritMetadata: true } : {}),
     });
     return new Sandbox(run, created.sandboxId, opts.template);
   }
@@ -141,7 +145,7 @@ export class Sandbox {
 
   /** Deletes every sandbox matching the filter, with all their snapshots and files. Prefer `hatchet.sandbox.delete`. */
   static async delete(client: HatchetClient, opts: SandboxListOpts): Promise<string[]> {
-    if (!opts.sandboxId && !opts.metadata) throw new Error('delete needs a sandboxId or a metadata filter');
+    if (!opts.sandboxId && Object.keys(opts.metadata ?? {}).length === 0) throw new Error('delete needs a sandboxId or a metadata filter');
     const run = turnRunner(client);
     const ids: string[] = [];
     for (const { sandboxId } of await Sandbox.list(client, opts)) {

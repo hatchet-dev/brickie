@@ -8,11 +8,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ### Added
 
+- `$create` with `inheritMetadata` starts a fork from the metadata of the sandbox that made its snapshot; pairs given with the create take precedence.
 - `$delete`: stops a sandbox and removes everything the store holds for it, metadata first so a concurrent `connect` finds no sandbox rather than an empty one. Idempotent, so a retry finishes a partial delete.
 
 ### Changed
 
-- Snapshot ids are `<sandboxId>/<runId>` and stored results live under `results/<sandboxId>/`, so a sandbox's objects share one prefix. Snapshot ids from earlier releases still resolve. A turn in flight across the upgrade re-runs once if Hatchet retries it.
+- Snapshot ids are `<sandboxId>/<runId>` and stored results live under `results/<sandboxId>/`, so a sandbox's objects share one prefix and `$delete` can find all of them. Snapshot ids from earlier releases are refused, so a sandbox created before this release cannot be connected or forked any more and its objects are pruned after 7 days. A turn in flight across the upgrade re-runs once if Hatchet retries it.
 
 ## [0.1.2] - 2026-10-28
 

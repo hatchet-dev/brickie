@@ -2,25 +2,22 @@
 
 brickie runs agent sandboxes as Hatchet tasks.
 
-A sandbox is a Docker container. Each call on a sandbox is one Hatchet task. Each call that changes the workspace makes a snapshot. A snapshot does not change. Any snapshot can start a new sandbox. A sandbox can be continued later by its ID.
+A sandbox is a container with a shell and a workspace. Every call on it is one Hatchet task. Every call that changes the workspace makes a snapshot. A snapshot never changes, any snapshot can start a new sandbox, and a sandbox can be picked up again later by its ID.
 
-## Requirements
+## Try it
 
-- Docker.
-- Node and pnpm.
-
-## Run the demo
+You need Docker, Node, and pnpm.
 
 ```bash
 hack/run-demo.sh        # the SDK walkthrough
 hack/run-demo.sh fs     # the file API only
 ```
 
-The script does the setup step by step and asks before each step. It starts Hatchet with Docker Compose, writes a token to `.env`, builds and starts the provider, and runs the demo. It is safe to run again.
+The script starts Hatchet with Docker Compose, writes a token to `.env`, builds and starts the provider, and runs the demo. It asks before each step and is safe to run again.
 
-The demo is one durable task, `agent-session`, in `examples/typescript/demo.ts`. It calls each SDK function once and prints the snapshot ID and timings for each step. Open [http://localhost:8888](http://localhost:8888) to see the task in the Hatchet dashboard. Log in with `admin@example.com` and `Admin123!!`.
+The demo is one durable task, `agent-session`, in `examples/typescript/demo.ts`. It calls each SDK function once and prints the snapshot ID and timings for each step. The Hatchet dashboard is at [http://localhost:8888](http://localhost:8888), login `admin@example.com` / `Admin123!!`.
 
-## TypeScript SDK
+## Use the SDK
 
 ```bash
 pnpm add @hatchet-dev/sandbox @hatchet-dev/typescript-sdk
@@ -46,47 +43,45 @@ const again = await hatchet.sandbox.connect('conv-42');
 await again.exec('cat haiku.txt');
 ```
 
-- `hatchet.sandbox.create(options)` starts a sandbox. `connect(id)` continues one. `list({ metadata })` finds them.
-- `sandbox.exec(cmd, { timeoutMs })` runs a shell command. A timeout returns exit code 124. `sandbox.files` reads and writes files. `sandbox.kill()` stops the sandbox and keeps its snapshots; `sandbox.delete()` and `hatchet.sandbox.delete({ metadata })` remove sandboxes with everything stored for them.
-- `files.read` and `files.write` carry up to `--max-file-bytes` (2 MiB) through a Hatchet task. Larger files go through the provider's `--store` and never enter Hatchet. On a laptop that is a directory (`file://`); in production, S3, GCS, or Azure Blob. `files.download` and `files.upload` move files between the workspace and an https URL. The sandbox needs no network for any of this.
-- In a durable task, each call is a step in the event log. Outside one, each call is a plain task run.
+- `create` starts a sandbox, `connect(id)` continues one, `list({ metadata })` finds them, `delete({ metadata })` removes them with everything stored for them.
+- `sandbox.exec(cmd)` runs a shell command. `sandbox.files` reads and writes files. `sandbox.kill()` stops the sandbox but keeps its snapshots.
+- Files up to 2 MiB travel inside the Hatchet task. Bigger files go through the provider's store and never enter Hatchet.
+- Inside a durable task every call is a step in the event log, so a crash picks up where it left off.
 
-The full reference is in TypeDoc. Run `pnpm docs` in `sdks/typescript` and open `sdks/typescript/docs/index.html`.
-
-## Isolation
-
-On a laptop, a sandbox is a plain container on the local Docker engine. Good for development and CI. It is not a VM. For untrusted agents, run the provider with `--driver kubernetes`. Each sandbox is then an [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) claim bound to a pre-started pod, under gVisor or Kata Containers when the cluster has the runtime class. `hack/e2e-kind.sh` runs the whole path on a local kind cluster. `docs/SECURITY.md` describes the trust boundaries.
-
-Each sandbox runs [`sandboxd`](https://github.com/kubernetes-sigs/agent-sandbox/blob/main/packages/sandboxd/USER_GUIDE.md), the agent-sandbox runtime daemon, as its process. The provider injects the binary and talks to it with a bearer token: commands over gRPC, files over REST. The daemon starts commands, streams their output, and kills the whole process group on a timeout. The image needs only `sh`, and `tar` for snapshots. On Kubernetes the daemon listens on loopback only and the provider's own image runs beside it in the pod as `brickie sandbox-tls`, so the provider and the sandbox talk over mutual TLS with certificates the provider issues; `--provider-image` names that image.
-
-No host environment variables reach a sandbox. The provider removes a sandbox after `--sandbox-idle-ttl` without a call, or after the `idleTimeoutMs` given at create. Its snapshots stay, so `connect` can bring it back; only `delete` removes them.
+The SDK README in `sdks/typescript` has the full API.
 
 ## Run the provider
 
-The provider is one process, `brickie worker`, on a machine with Docker. It connects out to Hatchet and needs nothing inbound. Run one per Hatchet tenant. Download the archive for your platform from the GitHub release, unpack it, and start it with the tenant token:
+The provider is one process, `brickie worker`. It connects out to Hatchet and needs nothing inbound. Run one per Hatchet tenant.
+
+On a machine with Docker, download the release archive for your platform and start it with the tenant token:
 
 ```bash
-tar -xzf brickie_0.1.0_Linux_x86_64.tar.gz
+tar -xzf brickie_0.1.2_Linux_x86_64.tar.gz
 HATCHET_CLIENT_TOKEN=... ./brickie worker
 ```
 
-Release binaries are built with the CMVP-certified Go Cryptographic Module and run in FIPS 140-3 mode; `brickie version` shows it. Snapshots, sandbox metadata, and files over 2 MiB live in `--store`: a bucket, or on one machine a `file://` directory the SDK can also reach, `~/.brickie/store` by default. Flags and their `BRICKIE_*` environment variables are listed by `brickie worker --help`. This mode runs sandboxes as plain containers on the local engine, for development and single-tenant use; untrusted agents belong on the Kubernetes driver, which runs from the container image `ghcr.io/hatchet-dev/brickie`, published with every release.
+Sandboxes are plain containers on the local Docker engine. That is fine for development and for agents you trust. It is not a VM.
 
-## Run on Kubernetes
-
-The `brickie` chart in [hatchet-charts](https://github.com/hatchet-dev/hatchet-charts) installs the provider and everything it needs: agent-sandbox for sandbox pods and warm pools, Kata Containers (the default runtime, one micro-VM per sandbox), and the sandbox NetworkPolicy. All subcharts are bundled.
+On Kubernetes, use the `brickie` chart from [hatchet-charts](https://github.com/hatchet-dev/hatchet-charts). Each sandbox is then its own pod, under Kata Containers or gVisor when the cluster has them, and the provider talks to it over mutual TLS. The [chart README](https://github.com/hatchet-dev/hatchet-charts/blob/main/charts/brickie/README.md) lists what to set up first.
 
 ```bash
 helm repo add hatchet https://hatchet-dev.github.io/hatchet-charts
-helm upgrade --install brickie hatchet/brickie --namespace brickie --create-namespace \
+helm install brickie hatchet/brickie --namespace brickie --create-namespace \
   --set hatchet.token=$HATCHET_CLIENT_TOKEN \
   --set store='s3://my-bucket?prefix=brickie/'
 ```
 
-What to set up first (nodes with KVM, a bucket and its IAM role, a CNI that enforces NetworkPolicy, a Hatchet tenant with gRPC operators) is in the [chart README](https://github.com/hatchet-dev/hatchet-charts/blob/main/charts/brickie/README.md).
+Either way, snapshots, sandbox metadata, and large files live in `--store`: a bucket in production, a local directory on a laptop. `brickie worker --help` lists every flag and its `BRICKIE_*` environment variable. Release builds run in FIPS 140-3 mode with the certified Go Cryptographic Module; `brickie version` shows it.
 
-## Use an external Hatchet instance
+## How it works
 
-1. Get a token from the tenant. The tenant needs gRPC operators enabled and Hatchet v0.110.0 or newer.
-2. Put it in `.env` as `HATCHET_CLIENT_TOKEN`. Remove the line `HATCHET_CLIENT_TLS_STRATEGY=none`.
-3. Run `hack/run-demo.sh` again. It does not start the local Hatchet.
+Every sandbox runs [sandboxd](https://github.com/kubernetes-sigs/agent-sandbox/blob/main/packages/sandboxd/USER_GUIDE.md), the agent-sandbox daemon, as its process. The provider talks to it with a bearer token: commands over gRPC, files over REST. The sandbox image only needs `sh` and `tar`. No host environment variables reach a sandbox, and a sandbox is removed after it sits idle for `--sandbox-idle-ttl`. Its snapshots stay until `delete`.
+
+`docs/SECURITY.md` describes the trust boundaries in detail.
+
+## Use your own Hatchet
+
+1. Get a token from the tenant. It needs gRPC operators enabled and Hatchet v0.110.0 or newer.
+2. Put it in `.env` as `HATCHET_CLIENT_TOKEN` and remove the line `HATCHET_CLIENT_TLS_STRATEGY=none`.
+3. Run `hack/run-demo.sh` again. It skips the local Hatchet.
