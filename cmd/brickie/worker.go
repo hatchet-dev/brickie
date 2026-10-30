@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -60,6 +61,8 @@ type providerConfig struct {
 	providerImage     string
 	egress            string
 	cpu, memory, disk string
+	nodeSelector      string
+	tolerations       string
 }
 
 var providerCfg providerConfig
@@ -81,6 +84,8 @@ func registerFlags(cmd *cobra.Command) {
 	f.StringVar(&providerCfg.providerSelector, "provider-selector", envOr("BRICKIE_PROVIDER_SELECTOR", "app.kubernetes.io/name=brickie"), "kubernetes: labels of this provider pod; only pods matching them may reach sandboxes")
 	f.StringVar(&providerCfg.providerImage, "provider-image", envOr("BRICKIE_PROVIDER_IMAGE", ""), "kubernetes: this provider's own image, run in every sandbox pod as the TLS proxy in front of sandboxd (brickie sandbox-tls)")
 	f.StringVar(&providerCfg.egress, "sandbox-egress", envOr("BRICKIE_SANDBOX_EGRESS", "internet"), "kubernetes: what sandboxes may reach: internet (public addresses and cluster DNS) or none")
+	f.StringVar(&providerCfg.nodeSelector, "sandbox-node-selector", envOr("BRICKIE_SANDBOX_NODE_SELECTOR", ""), "kubernetes: node labels sandbox pods are placed on, as key=value pairs separated by commas")
+	f.StringVar(&providerCfg.tolerations, "sandbox-tolerations", envOr("BRICKIE_SANDBOX_TOLERATIONS", ""), "kubernetes: tolerations for sandbox pods, as a JSON list of Kubernetes tolerations")
 	f.StringVar(&providerCfg.cpu, "sandbox-cpu", envOr("BRICKIE_SANDBOX_CPU", "1"), "kubernetes: cpu limit per sandbox")
 	f.StringVar(&providerCfg.memory, "sandbox-memory", envOr("BRICKIE_SANDBOX_MEMORY", "2Gi"), "kubernetes: memory limit per sandbox")
 	f.StringVar(&providerCfg.disk, "sandbox-disk", envOr("BRICKIE_SANDBOX_DISK", "10Gi"), "kubernetes: ephemeral storage limit per sandbox, including the workspace")
@@ -117,6 +122,16 @@ func runProvider(ctx context.Context, c providerConfig) error {
 		for q, s := range map[*resource.Quantity]string{&opts.CPU: c.cpu, &opts.Memory: c.memory, &opts.Disk: c.disk} {
 			if *q, err = resource.ParseQuantity(s); err != nil {
 				return fmt.Errorf("sandbox resource %q: %w", s, err)
+			}
+		}
+		if c.nodeSelector != "" {
+			if opts.NodeSelector, err = labels.ConvertSelectorToLabelsMap(c.nodeSelector); err != nil {
+				return fmt.Errorf("--sandbox-node-selector: %w", err)
+			}
+		}
+		if c.tolerations != "" {
+			if err := json.Unmarshal([]byte(c.tolerations), &opts.Tolerations); err != nil {
+				return fmt.Errorf("--sandbox-tolerations: %w", err)
 			}
 		}
 		d, err := kubernetes.New(opts)

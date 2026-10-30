@@ -96,6 +96,8 @@ spec:
               value: none
             - name: BRICKIE_PROVIDER_IMAGE
               value: brickie:e2e
+            - name: BRICKIE_SANDBOX_TOLERATIONS
+              value: '[{"key":"brickie.hatchet.run/sandbox","operator":"Equal","value":"true","effect":"NoSchedule"}]'
             - name: BRICKIE_WARM_REPLICAS
               value: "1"
             - name: BRICKIE_STORE
