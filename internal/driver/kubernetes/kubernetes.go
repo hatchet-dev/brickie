@@ -81,6 +81,10 @@ type Options struct {
 	Egress string
 	// CPU, Memory, and Disk bound each sandbox; Disk also caps the workspace.
 	CPU, Memory, Disk resource.Quantity
+	// NodeSelector and Tolerations place sandbox pods, on top of whatever the
+	// runtime class adds.
+	NodeSelector map[string]string
+	Tolerations  []corev1.Toleration
 }
 
 type Driver struct {
@@ -406,6 +410,8 @@ func (d *Driver) podSpec(image string) corev1.PodSpec {
 		rc := d.runtimeClass
 		spec.RuntimeClassName = &rc
 	}
+	spec.NodeSelector = d.opts.NodeSelector
+	spec.Tolerations = d.opts.Tolerations
 	return spec
 }
 

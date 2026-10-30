@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-30
+
+### Added
+
+- `--sandbox-node-selector` and `--sandbox-tolerations` place sandbox pods on tainted or labelled nodes, whatever the runtime class. Tolerations are a JSON list of Kubernetes tolerations.
+
 ## [0.1.3] - 2026-10-30
 
 ### Added
