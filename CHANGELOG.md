@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+### Added
+
+- Release images are signed with cosign keyless signing, and each platform manifest carries a signed SPDX SBOM attestation. `docs/SECURITY.md` has the verify commands.
+
 ## [0.1.4] - 2026-10-30
 
 ### Added
