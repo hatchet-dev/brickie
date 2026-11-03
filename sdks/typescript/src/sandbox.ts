@@ -5,21 +5,33 @@ import { setupTelemetry } from './otel.js';
 const TASK_NAMES = ['hatchet-sandbox', 'brickie-sandbox'];
 const taskNames = new WeakMap<HatchetClient, Promise<string>>();
 
+async function registered(client: HatchetClient, name: string): Promise<boolean> {
+  const namespace = client.config.namespace ?? '';
+  const full = name.startsWith(namespace) ? name : `${namespace}${name}`;
+  const { rows = [] } = await client.workflows.list({ name: full });
+  return rows.some((w) => w.name === full);
+}
+
+async function probe(client: HatchetClient): Promise<string | undefined> {
+  for (const name of TASK_NAMES) {
+    if (await registered(client, name)) return name;
+  }
+  return undefined;
+}
+
 function resolveTaskName(client: HatchetClient): Promise<string> {
   let pending = taskNames.get(client);
   if (!pending) {
-    pending = (async () => {
-      for (const name of TASK_NAMES) {
-        try {
-          await client.workflows.get(name);
-          return name;
-        } catch {
-          continue;
-        }
+    pending = probe(client).then(
+      (name) => {
+        if (!name) taskNames.delete(client);
+        return name ?? TASK_NAMES[TASK_NAMES.length - 1];
+      },
+      (err) => {
+        taskNames.delete(client);
+        throw err;
       }
-      taskNames.delete(client);
-      return TASK_NAMES[TASK_NAMES.length - 1];
-    })();
+    );
     taskNames.set(client, pending);
   }
   return pending;
