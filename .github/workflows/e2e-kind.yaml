@@ -9,7 +9,6 @@ on:
       - "go.mod"
       - "go.sum"
       - "Dockerfile"
-      - "sdks/typescript/**"
       - "examples/typescript/**"
       - "pnpm-lock.yaml"
       - "hack/e2e-kind.sh"

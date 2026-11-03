@@ -6,6 +6,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-03
+
+### Added
+
+- `create({ provider })` picks the sandbox provider by name when a tenant has more than one. It is sent as the `provider` metadata tag, so providers that already read that tag need no change.
+- The SDK works against any sandbox provider. On first use it checks whether the tenant serves the `hatchet-sandbox` task and uses that; otherwise it keeps using `brickie-sandbox`. Existing deployments need no change.
+- `HATCHET_SANDBOX_OTEL=false` turns the OpenTelemetry instrumentor off. `BRICKIE_OTEL=false` still works.
+
+### Changed
+
+- The package declares `sideEffects: true` so bundlers keep the import that adds `hatchet.sandbox` to the client.
+
+### Fixed
+
+- `files.write` of a staged file replayed in a durable task after its signed upload URL expired now asks the provider for a new URL instead of failing with `staging_failed`. For both `write` and `read`, that renewal is a plain task run rather than a durable child, so it does not shift the replayed child sequence.
+
 ## [0.1.1] - 2026-10-29
 
 ### Added

@@ -71,7 +71,7 @@ interface FsOutput extends JsonObject {
 }
 
 /** @internal */
-export type FsTurn = (fn: string, input: JsonObject) => Promise<FsOutput>;
+export type FsTurn = (fn: string, input: JsonObject, fresh?: boolean) => Promise<FsOutput>;
 
 const toEntry = (e: RawEntry): EntryInfo => ({
   ...e,
@@ -92,8 +92,13 @@ async function putStaged(url: string, bytes: Buffer): Promise<void> {
     await fs.writeFile(decodeURIComponent(url.slice('file://'.length)), bytes);
     return;
   }
-  const res = await fetch(url, { method: 'PUT', body: new Uint8Array(bytes), headers: { 'Content-Type': 'application/octet-stream' } });
-  if (!res.ok) throw new FilesystemError('staging_failed', `stage upload failed: HTTP ${res.status}`);
+  const res = await fetch(url, {
+    method: 'PUT',
+    body: new Uint8Array(bytes),
+    headers: { 'Content-Type': 'application/octet-stream' },
+  });
+  if (!res.ok)
+    throw new FilesystemError('staging_failed', `stage upload failed: HTTP ${res.status}`);
 }
 
 async function getStaged(url: string): Promise<Buffer> {
@@ -101,7 +106,8 @@ async function getStaged(url: string): Promise<Buffer> {
     return fs.readFile(decodeURIComponent(url.slice('file://'.length)));
   }
   const res = await fetch(url);
-  if (!res.ok) throw new FilesystemError('staging_failed', `stage download failed: HTTP ${res.status}`);
+  if (!res.ok)
+    throw new FilesystemError('staging_failed', `stage download failed: HTTP ${res.status}`);
   return Buffer.from(await res.arrayBuffer());
 }
 /** File operations on a sandbox workspace. Paths are relative to the workspace. Each call is one Hatchet task. */
@@ -109,8 +115,8 @@ export class Files {
   /** @internal */
   constructor(private readonly turn: FsTurn) {}
 
-  private async call(fn: string, input: JsonObject): Promise<FsOutput> {
-    const out = await this.turn(`$fs.${fn}`, input);
+  private async call(fn: string, input: JsonObject, fresh = false): Promise<FsOutput> {
+    const out = await this.turn(`$fs.${fn}`, input, fresh);
     if (out.error) throw new FilesystemError(out.error.code, out.error.message);
     return out;
   }
@@ -121,19 +127,21 @@ export class Files {
   read(path: string, opts: ReadOpts & { format: 'blob' }): Promise<Blob>;
   async read(path: string, opts: ReadOpts = {}): Promise<string | Uint8Array | Blob> {
     const out = await this.call('read', { path });
-    const bytes = out.url ? await this.readStaged(out.url, out.stagedKey!) : Buffer.from(out.content ?? '', 'base64');
+    const bytes = out.url
+      ? await this.readStaged(out.url, out.stagedKey!)
+      : Buffer.from(out.content ?? '', 'base64');
     if (opts.format === 'bytes') return new Uint8Array(bytes);
     if (opts.format === 'blob') return new Blob([new Uint8Array(bytes)]);
     return bytes.toString('utf8');
   }
 
-  /** A replayed durable read may hold a URL that has expired; the provider signs the same staged file again. */
+  /** A replayed durable read may hold a URL that has expired; the provider signs the same staged file again. The renewal is a plain run, not a durable child, so the replayed child sequence stays aligned. */
   private async readStaged(url: string, stagedKey: string): Promise<Buffer> {
     try {
       return await getStaged(url);
     } catch (e) {
       if (url.startsWith('file://') || !(e instanceof FilesystemError)) throw e;
-      const { getUrl } = await this.call('presign', { stagedKey });
+      const { getUrl } = await this.call('presign', { stagedKey }, true);
       return getStaged(getUrl!);
     }
   }
@@ -141,7 +149,10 @@ export class Files {
   /** Writes one file or several. Parent directories are created. Bytes are stored exactly. Files over 2 MiB go through the provider's `--store` instead of Hatchet. */
   write(path: string, data: FileData): Promise<EntryInfo>;
   write(files: WriteEntry[]): Promise<EntryInfo[]>;
-  async write(pathOrFiles: string | WriteEntry[], data?: FileData): Promise<EntryInfo | EntryInfo[]> {
+  async write(
+    pathOrFiles: string | WriteEntry[],
+    data?: FileData
+  ): Promise<EntryInfo | EntryInfo[]> {
     if (typeof pathOrFiles !== 'string') return this.writeFiles(pathOrFiles);
     const [entry] = await this.writeFiles([{ path: pathOrFiles, data: data ?? '' }]);
     return entry;
@@ -152,10 +163,17 @@ export class Files {
     const encoded = await Promise.all(
       files.map(async (f) => {
         const bytes = await toBytes(f.data);
-        if (bytes.length <= STAGE_OVER_BYTES) return { path: f.path, content: bytes.toString('base64') };
+        if (bytes.length <= STAGE_OVER_BYTES)
+          return { path: f.path, content: bytes.toString('base64') };
         const { stagedKey, putUrl } = await this.call('presign', {});
-        await putStaged(putUrl!, bytes);
-        return { path: f.path, stagedKey: stagedKey! };
+        try {
+          await putStaged(putUrl!, bytes);
+          return { path: f.path, stagedKey: stagedKey! };
+        } catch {
+          const again = await this.call('presign', {}, true);
+          await putStaged(again.putUrl!, bytes);
+          return { path: f.path, stagedKey: again.stagedKey! };
+        }
       })
     );
     const { entries = [] } = await this.call('write', { files: encoded });
@@ -205,11 +223,19 @@ export class Files {
   }
   /** The provider fetches an https URL into the workspace. The sandbox needs no network. Private and loopback addresses are refused. */
   async download(url: string, path: string, opts: TransferOpts = {}): Promise<EntryInfo> {
-    const { entry } = await this.call('download', { url, path, ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}) });
+    const { entry } = await this.call('download', {
+      url,
+      path,
+      ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+    });
     return toEntry(entry!);
   }
   /** The provider sends a workspace file to an https URL with HTTP PUT, for example a presigned URL. */
   async upload(path: string, url: string, opts: TransferOpts = {}): Promise<void> {
-    await this.call('upload', { path, url, ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}) });
+    await this.call('upload', {
+      path,
+      url,
+      ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+    });
   }
 }

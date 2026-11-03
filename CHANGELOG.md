@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to the brickie provider. The TypeScript SDK has its own changelog in `sdks/typescript/CHANGELOG.md`.
+All notable changes to the brickie provider. The TypeScript SDK lives in [hatchet-dev/hatchet](https://github.com/hatchet-dev/hatchet/tree/main/sdks/typescript-sandbox) with its own changelog.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Each release reads its notes from the matching section here.
 

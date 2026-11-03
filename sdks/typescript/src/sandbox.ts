@@ -2,7 +2,28 @@ import { HatchetClient, JsonObject } from '@hatchet-dev/typescript-sdk/v1';
 import { Files } from './files.js';
 import { setupTelemetry } from './otel.js';
 
-const SANDBOX_TASK_NAME = 'brickie-sandbox';
+const TASK_NAMES = ['hatchet-sandbox', 'brickie-sandbox'];
+const taskNames = new WeakMap<HatchetClient, Promise<string>>();
+
+function resolveTaskName(client: HatchetClient): Promise<string> {
+  let pending = taskNames.get(client);
+  if (!pending) {
+    pending = (async () => {
+      for (const name of TASK_NAMES) {
+        try {
+          await client.workflows.get(name);
+          return name;
+        } catch {
+          continue;
+        }
+      }
+      taskNames.delete(client);
+      return TASK_NAMES[TASK_NAMES.length - 1];
+    })();
+    taskNames.set(client, pending);
+  }
+  return pending;
+}
 
 interface TurnInput extends JsonObject {
   sandboxId?: string;
@@ -49,6 +70,8 @@ export interface SandboxOpts {
   idleTimeoutMs?: number;
   /** With `from`, start from the metadata of the sandbox that made that snapshot. Pairs given in `metadata` take precedence over inherited ones. */
   inheritParentMetadata?: boolean;
+  /** Name of the sandbox provider to create on. Required when the tenant has more than one; with `from`, it must be the provider that holds the snapshot. */
+  provider?: string;
 }
 
 export interface ExecOpts {
@@ -78,24 +101,32 @@ export interface SandboxInfo {
   lastUsed?: Date;
 }
 
-type RunTurn = (input: TurnInput) => Promise<TurnResult>;
+type RunTurn = (input: TurnInput, opts?: { fresh?: boolean }) => Promise<TurnResult>;
 
 function turnRunner(client: HatchetClient): RunTurn {
-  const task = client.workflow<TurnInput, Record<string, TurnResult>>({ name: SANDBOX_TASK_NAME });
-  return async (input) => {
-    const result = await task.run(input, {
-      additionalMetadata: {
-        'brickie.fn': input.fn,
-        ...(input.sandboxId ? { 'brickie.sandbox': input.sandboxId } : {}),
-        ...(input.image ? { 'brickie.image': input.image } : {}),
-        ...(input.snapshotId ? { 'brickie.from': input.snapshotId } : {}),
-      },
-    });
-    return result[SANDBOX_TASK_NAME] ?? (result as unknown as TurnResult);
+  const resolved = resolveTaskName(client);
+  return async (input, opts) => {
+    const name = await resolved;
+    const additionalMetadata = {
+      'brickie.fn': input.fn,
+      ...(input.sandboxId ? { 'brickie.sandbox': input.sandboxId } : {}),
+      ...(input.image ? { 'brickie.image': input.image } : {}),
+      ...(input.snapshotId ? { 'brickie.from': input.snapshotId } : {}),
+    };
+    const result = opts?.fresh
+      ? await (
+          await client.admin.runWorkflow<TurnInput, Record<string, TurnResult>>(name, input, {
+            additionalMetadata,
+          })
+        ).result()
+      : await client
+          .workflow<TurnInput, Record<string, TurnResult>>({ name })
+          .run(input, { additionalMetadata });
+    return result[name] ?? (result as unknown as TurnResult);
   };
 }
 
-/** One sandbox. Every method is one `brickie-sandbox` Hatchet task. */
+/** One sandbox. Every method is one Hatchet task on the tenant's sandbox provider. */
 export class Sandbox {
   /** File operations on the workspace. */
   readonly files: Files;
@@ -105,20 +136,21 @@ export class Sandbox {
     readonly sandboxId: string,
     private readonly template?: string
   ) {
-    this.files = new Files((fn, input) => this.turn(fn, input));
+    this.files = new Files((fn, input, fresh) => this.turn(fn, input, fresh));
   }
 
   /** Starts a new sandbox. Prefer `hatchet.sandbox.create`. */
   static async create(client: HatchetClient, opts: SandboxOpts = {}): Promise<Sandbox> {
     void setupTelemetry();
     const run = turnRunner(client);
+    const metadata = opts.provider ? { ...opts.metadata, provider: opts.provider } : opts.metadata;
     const created = await run({
       fn: '$create',
       input: {},
       ...(opts.id ? { sandboxId: opts.id } : {}),
       ...(opts.template ? { image: opts.template } : {}),
       ...(opts.from ? { snapshotId: opts.from } : {}),
-      ...(opts.metadata ? { metadata: opts.metadata } : {}),
+      ...(metadata ? { metadata } : {}),
       ...(opts.idleTimeoutMs ? { idleTtlMs: opts.idleTimeoutMs } : {}),
       ...(opts.inheritParentMetadata ? { inheritMetadata: true } : {}),
     });
@@ -126,10 +158,19 @@ export class Sandbox {
   }
 
   /** Attaches to a sandbox by ID. Prefer `hatchet.sandbox.connect`. */
-  static async connect(client: HatchetClient, sandboxId: string, opts: ConnectOpts = {}): Promise<Sandbox> {
+  static async connect(
+    client: HatchetClient,
+    sandboxId: string,
+    opts: ConnectOpts = {}
+  ): Promise<Sandbox> {
     void setupTelemetry();
     const run = turnRunner(client);
-    await run({ fn: '$connect', input: {}, sandboxId, ...(opts.template ? { image: opts.template } : {}) });
+    await run({
+      fn: '$connect',
+      input: {},
+      sandboxId,
+      ...(opts.template ? { image: opts.template } : {}),
+    });
     return new Sandbox(run, sandboxId, opts.template);
   }
 
@@ -137,15 +178,25 @@ export class Sandbox {
   static async list(client: HatchetClient, opts: SandboxListOpts = {}): Promise<SandboxInfo[]> {
     const result = await turnRunner(client)({
       fn: '$list',
-      input: { ...(opts.sandboxId ? { sandboxId: opts.sandboxId } : {}), ...(opts.metadata ? { metadata: opts.metadata } : {}) },
+      input: {
+        ...(opts.sandboxId ? { sandboxId: opts.sandboxId } : {}),
+        ...(opts.metadata ? { metadata: opts.metadata } : {}),
+      },
     });
-    const raw = (result.output.sandboxes ?? []) as Array<Omit<SandboxInfo, 'createdAt' | 'lastUsed'> & { createdAt: string; lastUsed?: string }>;
-    return raw.map((s) => ({ ...s, createdAt: new Date(s.createdAt), lastUsed: s.lastUsed ? new Date(s.lastUsed) : undefined }));
+    const raw = (result.output.sandboxes ?? []) as Array<
+      Omit<SandboxInfo, 'createdAt' | 'lastUsed'> & { createdAt: string; lastUsed?: string }
+    >;
+    return raw.map((s) => ({
+      ...s,
+      createdAt: new Date(s.createdAt),
+      lastUsed: s.lastUsed ? new Date(s.lastUsed) : undefined,
+    }));
   }
 
   /** Deletes every sandbox matching the filter, with all their snapshots and files. Prefer `hatchet.sandbox.delete`. */
   static async delete(client: HatchetClient, opts: SandboxListOpts): Promise<string[]> {
-    if (!opts.sandboxId && Object.keys(opts.metadata ?? {}).length === 0) throw new Error('delete needs a sandboxId or a metadata filter');
+    if (!opts.sandboxId && Object.keys(opts.metadata ?? {}).length === 0)
+      throw new Error('delete needs a sandboxId or a metadata filter');
     const run = turnRunner(client);
     const ids: string[] = [];
     for (const { sandboxId } of await Sandbox.list(client, opts)) {
@@ -157,7 +208,10 @@ export class Sandbox {
 
   /** Runs a shell command with `sh -c` in the workspace and makes a snapshot. A timeout gives `exitCode` 124, not an error. */
   async exec(cmd: string, opts: ExecOpts = {}): Promise<CommandResult> {
-    return this.turn<CommandResult>('$command', { cmd, ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}) });
+    return this.turn<CommandResult>('$command', {
+      cmd,
+      ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+    });
   }
 
   /** Removes the sandbox. Its snapshots stay; `connect` can bring it back. */
@@ -170,14 +224,21 @@ export class Sandbox {
     await this.turn('$delete', {});
   }
 
-  private async turn<T = JsonObject>(fn: string, input: JsonObject): Promise<T> {
-    const result = await this.run({
-      sandboxId: this.sandboxId,
-      ...(this.template ? { image: this.template } : {}),
-      fn,
-      input,
-    });
-    return { ...result.output, snapshotId: result.snapshotId, timings: result.timings } as unknown as T;
+  private async turn<T = JsonObject>(fn: string, input: JsonObject, fresh = false): Promise<T> {
+    const result = await this.run(
+      {
+        sandboxId: this.sandboxId,
+        ...(this.template ? { image: this.template } : {}),
+        fn,
+        input,
+      },
+      { fresh }
+    );
+    return {
+      ...result.output,
+      snapshotId: result.snapshotId,
+      timings: result.timings,
+    } as unknown as T;
   }
 }
 
