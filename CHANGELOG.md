@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+### Added
+
+- `--sandboxd-image` (`BRICKIE_SANDBOXD_IMAGE`) picks the image the sandboxd binary is taken from.
+- FIPS images on ghcr.io/hatchet-dev: `brickie-fips` beside `brickie`, and `agent-sandbox-controller-fips`, `sandboxd-fips` and `ubi-minimal-fips` built daily from upstream releases.
+
+### Changed
+
+- `brickie` images are no longer FIPS builds; use `brickie-fips`. Release binaries stay FIPS.
+
 ## [0.1.4] - 2026-10-30
 
 ### Added

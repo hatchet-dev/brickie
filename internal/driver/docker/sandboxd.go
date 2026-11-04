@@ -3,6 +3,7 @@ package docker
 import (
 	"archive/tar"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -30,7 +31,8 @@ func (d *Driver) ensureSandboxd(ctx context.Context) (string, error) {
 	if err != nil {
 		cacheDir = os.TempDir()
 	}
-	dest := filepath.Join(cacheDir, "brickie", "sandboxd-"+arch+"-"+sandboxd.Image[len(sandboxd.Image)-12:])
+	ref := sha256.Sum256([]byte(sandboxd.Image))
+	dest := filepath.Join(cacheDir, "brickie", fmt.Sprintf("sandboxd-%s-%x", arch, ref[:6]))
 	if _, err := os.Stat(dest); err == nil {
 		return dest, nil
 	}

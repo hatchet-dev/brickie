@@ -1,0 +1,56 @@
+name: fips-images
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent_sandbox_version:
+        description: "agent-sandbox release tag; default: latest and the go.mod pin"
+        required: false
+  schedule:
+    - cron: "17 6 * * *"
+  push:
+    branches: [main]
+    paths: [.github/workflows/fips-images.yaml, hack/agent-sandbox-fips.Dockerfile, hack/sandbox-fips.Dockerfile, hack/check-fips.sh, go.mod]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  UBI_PIN: "9.8"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build the FIPS images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AS_INPUT: ${{ inputs.agent_sandbox_version }}
+        run: |
+          set -euo pipefail
+          ghcr=ghcr.io/hatchet-dev
+          build() { # dockerfile target tag [build-args...]
+            local file=$1 target=$2 tag=$3; shift 3
+            docker buildx imagetools inspect "$tag" >/dev/null 2>&1 && { echo "have $tag"; return; }
+            docker buildx build --platform linux/amd64,linux/arm64 --push -f "hack/$file" ${target:+--target "$target"} -t "$tag" "$@" hack
+          }
+
+          versions="${AS_INPUT:-$(gh release view --repo kubernetes-sigs/agent-sandbox --json tagName --jq .tagName) $(go list -m -f '{{.Version}}' sigs.k8s.io/agent-sandbox)}"
+          for v in $(tr ' ' '\n' <<< "$versions" | sort -u); do
+            build agent-sandbox-fips.Dockerfile controller "$ghcr/agent-sandbox-controller-fips:$v" --build-arg "VERSION=$v"
+            build agent-sandbox-fips.Dockerfile sandboxd "$ghcr/sandboxd-fips:$v" --build-arg "VERSION=$v"
+          done
+          docker buildx build --platform linux/amd64,linux/arm64 --push -f hack/sandbox-fips.Dockerfile --build-arg "UBI=$UBI_PIN" -t "$ghcr/ubi-minimal-fips:$UBI_PIN" hack
