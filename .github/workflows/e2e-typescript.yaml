@@ -8,7 +8,6 @@ on:
       - "internal/**"
       - "go.mod"
       - "go.sum"
-      - "sdks/typescript/**"
       - "pnpm-lock.yaml"
       - "hack/run-demo.sh"
       - "docker-compose.yml"
@@ -46,10 +45,10 @@ jobs:
         run: hack/run-demo.sh up
         env:
           BRICKIE_YES: "1"
-      - name: SDK end-to-end tests
+      - name: End-to-end tests
         run: |
           set -a; . ./.env; set +a
-          pnpm --filter @hatchet-dev/sandbox test
+          pnpm -C examples/typescript test
       - name: Provider log
         if: always()
         run: cat ~/.brickie/provider.log || true
