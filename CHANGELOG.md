@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-10
+
+### Added
+
+- `--runtime` accepts any RuntimeClass name on the cluster, and the alias `nitro` for EKS `isolated-sandbox`. `auto` tries `kata-clh`, `gvisor`, then `isolated-sandbox`.
+
 ### Removed
 
 - The TypeScript SDK sources, build and npm publish. `@hatchet-dev/sandbox` is developed and released from `hatchet-dev/hatchet`; the examples and the end-to-end test suite here use the published package.
