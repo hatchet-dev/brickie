@@ -125,7 +125,7 @@ cd examples/typescript
 export DEMO_BIG_MB=1
 case "${1:-}" in
   fs) pnpm fs-demo ;;
-  "") pnpm fs-demo && pnpm demo && pnpm --filter @hatchet-dev/sandbox test ;;
+  "") pnpm fs-demo && pnpm demo && pnpm test ;;
   *) echo "usage: hack/e2e-kind.sh [fs|down]" >&2; exit 1 ;;
 esac
 echo
