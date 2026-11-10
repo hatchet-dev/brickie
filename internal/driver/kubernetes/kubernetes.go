@@ -54,10 +54,13 @@ const (
 	tlsDir             = "/etc/brickie/tls"
 	gvisorRuntimeClass = "gvisor"
 	kataRuntimeClass   = "kata-clh"
+	nitroRuntimeClass  = "isolated-sandbox"
 	readyTimeout       = 5 * time.Minute
 )
 
-var runtimeClasses = map[string]string{"gvisor": gvisorRuntimeClass, "kata": kataRuntimeClass}
+var runtimeClasses = map[string]string{"gvisor": gvisorRuntimeClass, "kata": kataRuntimeClass, "nitro": nitroRuntimeClass}
+
+var autoRuntimeClasses = []string{kataRuntimeClass, gvisorRuntimeClass, nitroRuntimeClass}
 
 // Options configures the driver; zero values take the defaults.
 type Options struct {
@@ -198,20 +201,20 @@ func (d *Driver) detectRuntime(ctx context.Context) error {
 	case "none":
 		return nil
 	case "", "auto":
-		for _, rc := range []string{kataRuntimeClass, gvisorRuntimeClass} {
+		for _, rc := range autoRuntimeClasses {
 			if has(rc) {
 				d.runtimeClass = rc
 				break
 			}
 		}
 		if d.runtimeClass == "" {
-			fmt.Fprintf(os.Stderr, "brickie: no %s or %s runtime class; sandboxes run with the default runtime\n", kataRuntimeClass, gvisorRuntimeClass)
+			fmt.Fprintf(os.Stderr, "brickie: none of the %s runtime classes found; sandboxes run with the default runtime\n", strings.Join(autoRuntimeClasses, ", "))
 			return nil
 		}
 	default:
 		rc, ok := runtimeClasses[mode]
 		if !ok {
-			return fmt.Errorf("unknown runtime %q (auto|gvisor|kata|none)", mode)
+			rc = mode
 		}
 		if !has(rc) {
 			return fmt.Errorf("runtime %s requested but the %q runtime class is not on this cluster", mode, rc)
