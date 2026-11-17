@@ -75,6 +75,27 @@ The agent-sandbox controller creates the pods and the NetworkPolicy. Its permiss
 - A pod that was replaced (node drain, eviction) loses its workspace. The provider detects this through a marker file, written only after a restore succeeded and never extracted from a snapshot, and refuses to run a turn on it. `connect` restores the latest snapshot into the new pod. A fork records its inherited snapshot as its latest at creation, so it can be connected again even before its first change.
 - A failure to record the latest snapshot fails the turn after three attempts, and a store that cannot be read fails a connect, so a sandbox never silently comes back empty. A turn that stored its snapshot records its result beside it, together with the latest pointer as it stood, before publishing, so a retry of the same run (Hatchet keeps the run id) returns the stored result instead of running the command a second time, and publishes its snapshot only if no later turn has published since. A store that cannot be read for that record fails the retry rather than running the command again.
 
+## Verifying images
+
+Every image we publish is signed with [cosign](https://docs.sigstore.dev/cosign/) keyless signing, bound to the GitHub Actions OIDC identity of the workflow run, and each platform manifest carries a syft SPDX SBOM as a signed in-toto attestation. `ghcr.io/hatchet-dev/brickie` is signed by `release.yaml` on a `v*` tag; `ghcr.io/hatchet-dev/sandboxd` and `ghcr.io/hatchet-dev/agent-sandbox-controller` are signed by a workflow run on `main`.
+
+```sh
+cosign verify ghcr.io/hatchet-dev/brickie:0.1.6 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/hatchet-dev/brickie/\.github/workflows/release\.yaml@refs/tags/v'
+
+cosign verify ghcr.io/hatchet-dev/sandboxd:v1.0.8 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/hatchet-dev/brickie/\.github/workflows/[^@]+@refs/heads/main$'
+
+digest=$(docker buildx imagetools inspect ghcr.io/hatchet-dev/brickie:0.1.6 --format '{{json .Manifest}}' \
+  | jq -r '.manifests[] | select(.platform.architecture == "amd64") | .digest')
+cosign verify-attestation --type spdxjson "ghcr.io/hatchet-dev/brickie@$digest" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/hatchet-dev/brickie/\.github/workflows/release\.yaml@refs/tags/v' \
+  | jq -r .payload | base64 -d | jq .predicate > sbom.spdx.json
+```
+
 ## What to check when a boundary moves
 
 - A new way for the provider to reach a sandbox: it must carry the token and must not need pods access.

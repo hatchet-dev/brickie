@@ -30,7 +30,7 @@ import (
 // Image is our FIPS build of the agent-sandbox release pinned in go.mod and in
 // the chart's agent-sandbox.image.tag; the three must move together.
 // --sandboxd-image replaces it.
-var Image = "ghcr.io/hatchet-dev/sandboxd-fips:v1.0.8"
+var Image = "ghcr.io/hatchet-dev/sandboxd:v1.0.8"
 
 const (
 	ImageBinary = "/usr/local/bin/sandboxd"
