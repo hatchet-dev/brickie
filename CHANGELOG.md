@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to the brickie provider. The TypeScript SDK has its own changelog in `sdks/typescript/CHANGELOG.md`.
+All notable changes to the brickie provider. The TypeScript SDK, `@hatchet-dev/sandbox`, lives in [hatchet-dev/hatchet](https://github.com/hatchet-dev/hatchet/tree/main/sdks/typescript-sandbox) with its own changelog.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Each release reads its notes from the matching section here.
 
@@ -14,6 +14,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 ### Changed
 
 - `brickie` images are no longer FIPS builds; use `brickie-fips`. Release binaries stay FIPS.
+
+## [0.1.6] - 2026-11-17
+
+### Fixed
+
+- Restoring a snapshot into a sandbox that runs as a non-root user failed with `tar: .: Cannot utime: Operation not permitted` when the image ships GNU tar. The restore now skips the workspace directory entry itself, so `/workspace` is never modified and only its contents are extracted. Existing snapshots are unaffected.
+
+## [0.1.5] - 2026-11-10
+
+### Added
+
+- `--runtime` accepts any RuntimeClass name on the cluster, and the alias `nitro` for EKS `isolated-sandbox`. `auto` tries `kata-clh`, `gvisor`, then `isolated-sandbox`.
+
+### Removed
+
+- The TypeScript SDK sources, build and npm publish. `@hatchet-dev/sandbox` is developed and released from `hatchet-dev/hatchet`; the examples and the end-to-end test suite here use the published package.
 
 ## [0.1.4] - 2026-10-30
 

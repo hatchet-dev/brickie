@@ -9,7 +9,7 @@ brickie runs agent sandboxes as Hatchet durable tasks. The README covers how to 
 - `internal/sandboxd/`: client for the agent-sandbox runtime daemon that is PID 1 in every sandbox; commands over gRPC, files over REST, bearer token on both, mutual TLS when the driver passes a config
 - `internal/sandboxtls/`: the CA the provider holds, the certificates it issues, and the proxy `sandbox-tls` runs
 - `internal/driver/`: the turn body both drivers share (restore, `$fs.*`, `$command`, checkpoint); `docker/` runs sandboxes as containers on the local engine, `kubernetes/` as agent-sandbox claims bound from per-image warm pools
-- `sdks/typescript`: the client SDK; `examples/typescript`: the demo session
+- `examples/typescript`: the demo session and the end-to-end test suite, both on the published `@hatchet-dev/sandbox` SDK, which lives in `hatchet-dev/hatchet` under `sdks/typescript-sandbox`
 - `docker-compose.yml`: Hatchet lite v0.110.5 + Postgres with gRPC operators enabled; the provider runs on the host and talks to the local Docker engine
 - `hack/run-demo.sh`: first-run setup + the demo session on Docker; `hack/e2e-kind.sh`: the same demos against the Kubernetes driver on a kind cluster
 - `docs/SECURITY.md`: trust boundaries and controls; update it when a boundary moves
@@ -19,17 +19,16 @@ brickie runs agent sandboxes as Hatchet durable tasks. The README covers how to 
 
 ```bash
 go build ./... && go vet ./...
-cd sdks/typescript && pnpm install && pnpm typecheck
-cd examples/typescript && pnpm install && pnpm typecheck
+pnpm install && pnpm -r typecheck
 ```
 
 Build binaries to /tmp or use `go install`, do not commit binaries.
 
-CI runs both demos end to end on every pull request: `.github/workflows/e2e-docker.yaml` on the Docker driver (`hack/run-demo.sh`) and `.github/workflows/e2e-kind.yaml` on the Kubernetes driver (`hack/e2e-kind.sh` on a kind cluster). `.github/workflows/e2e-typescript.yaml` runs the SDK's test suite (`sdks/typescript/test`, `pnpm test`) against a provider started with `hack/run-demo.sh up`; the demos stay simple and the concept checks live in that suite. Each first calls `mirror-sandboxd.yaml`, which copies the pinned sandboxd digest into `ghcr.io/hatchet-dev/sandboxd` if it is not there yet. The kind node pulls that image without credentials, so the package has to be public.
+CI runs both demos end to end on every pull request: `.github/workflows/e2e-docker.yaml` on the Docker driver (`hack/run-demo.sh`) and `.github/workflows/e2e-kind.yaml` on the Kubernetes driver (`hack/e2e-kind.sh` on a kind cluster). `.github/workflows/e2e-typescript.yaml` runs the test suite (`examples/typescript/test`, `pnpm test`) against a provider started with `hack/run-demo.sh up`; the demos stay simple and the concept checks live in that suite. Each first calls `mirror-sandboxd.yaml`, which copies the pinned sandboxd digest into `ghcr.io/hatchet-dev/sandboxd` if it is not there yet. The kind node pulls that image without credentials, so the package has to be public.
 
 ## Rules
 
-- The engine and all execution logic are Go. The SDK stays thin: it triggers the `brickie-sandbox` task by name and never chooses a provider. Placement follows only from `HATCHET_CLIENT_TOKEN` being set or not.
+- The engine and all execution logic are Go. The SDK stays thin: it triggers the `brickie-sandbox` task by name and never chooses a provider. A change to the turn contract here needs a matching SDK change in `hatchet-dev/hatchet`, kept backwards compatible.
 - TypeScript: import the Hatchet SDK from `@hatchet-dev/typescript-sdk/v1` only, and build orchestration on v1 `DurableContext` primitives (`spawnChild`, `spawnChildren`, `sleepFor`, `waitForEvent`). Use pnpm, never npm or yarn.
 - Task names must not contain colons. Hatchet action ids are `workflow:task`.
 - Parallel children from a durable task must go through one bulk spawn (`spawnChildren`). Parallel single spawns trip non-determinism detection.
@@ -39,7 +38,7 @@ CI runs both demos end to end on every pull request: `.github/workflows/e2e-dock
 - Do not add code comments except where the code cannot express a constraint. No comments explaining what the next line does.
 - First version of anything new is 0.1.0.
 - Images follow the hatchet repo's `name` / `name-fips` pairing. ghcr.io/hatchet-dev holds only what we build: `brickie` and `brickie-fips` from `release.yaml` (Dockerfile `FIPS=true`); `agent-sandbox-controller-fips`, `sandboxd-fips` (`hack/agent-sandbox-fips.Dockerfile`) and `ubi-minimal-fips` (`hack/sandbox-fips.Dockerfile`) from `fips-images.yaml`, daily. Plain upstream images are pulled from their own registries, not mirrored. FIPS builds use `GOFIPS140=v1.0.0`, which also turns `fips140=on` on by default, gated by `hack/check-fips.sh`. goreleaser binaries are FIPS. kata-deploy has no FIPS variant: nothing in it does cryptography.
-- `CHANGELOG.md` (provider) and `sdks/typescript/CHANGELOG.md` (SDK) follow Keep a Changelog. A change goes under `Unreleased`; a release turns that into a `## [version] - date` section, which the release workflows read and refuse to ship without. Never edit a section that has been released.
+- `CHANGELOG.md` follows Keep a Changelog. A change goes under `Unreleased`; a release turns that into a `## [version] - date` section, which the release workflow reads and refuses to ship without. Never edit a section that has been released.
 - The sandbox `template` option is a container image. Idle TTL is a provider setting; a turn is bounded by the SDK's `timeoutMs` and the calling task's own timeout, never by a provider flag.
 - A sandbox id is a run id or a caller-supplied id; the provider keeps a latest-snapshot pointer per sandbox and `$connect` resolves it. Never silently give a connect an empty workspace.
 

@@ -80,7 +80,7 @@ func registerFlags(cmd *cobra.Command) {
 	f.DurationVar(&providerCfg.maxIdleTTL, "max-sandbox-idle-ttl", envDurationOr("BRICKIE_MAX_SANDBOX_IDLE_TTL", 24*time.Hour), "longest idle ttl a sandbox may ask for at create")
 	f.IntVar(&providerCfg.slots, "slots", int(envIntOr("BRICKIE_SLOTS", 10)), "concurrent sandbox turns")
 	f.StringVar(&providerCfg.namespace, "namespace", envOr("BRICKIE_SANDBOX_NAMESPACE", "default"), "kubernetes: namespace for sandbox pods and claims")
-	f.StringVar(&providerCfg.runtime, "runtime", envOr("BRICKIE_SANDBOX_RUNTIME", "auto"), "kubernetes: runtime class for sandbox pods: auto (kata, then gvisor), kata, gvisor, or none")
+	f.StringVar(&providerCfg.runtime, "runtime", envOr("BRICKIE_SANDBOX_RUNTIME", "auto"), "kubernetes: runtime class for sandbox pods: auto (kata, gvisor, then nitro), kata, gvisor, nitro (EKS isolated-sandbox), none, or any RuntimeClass name on the cluster")
 	f.IntVar(&providerCfg.warmReplicas, "warm-replicas", int(envIntOr("BRICKIE_WARM_REPLICAS", 2)), "kubernetes: pre-started pods kept per image")
 	f.Int64Var(&providerCfg.maxSnapshot, "max-snapshot-bytes", envIntOr("BRICKIE_MAX_SNAPSHOT_BYTES", 1<<30), "largest workspace snapshot a turn may produce")
 	f.StringVar(&providerCfg.providerNamespace, "provider-namespace", envOr("BRICKIE_PROVIDER_NAMESPACE", ""), "kubernetes: namespace of this provider pod and its sandboxd token secret (default: the pod's own)")

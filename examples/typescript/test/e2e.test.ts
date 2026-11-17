@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
 import { HatchetClient, type JsonObject } from '@hatchet-dev/typescript-sdk/v1';
-import '../src/index.js';
+import '@hatchet-dev/sandbox';
 
 const hatchet = HatchetClient.init();
 const template = process.env.DEMO_TEMPLATE ?? 'alpine:3';

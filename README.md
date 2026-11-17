@@ -48,7 +48,7 @@ await again.exec('cat haiku.txt');
 - Files up to 2 MiB travel inside the Hatchet task. Bigger files go through the provider's store and never enter Hatchet.
 - Inside a durable task every call is a step in the event log, so a crash picks up where it left off.
 
-The SDK README in `sdks/typescript` has the full API.
+The SDK is [`@hatchet-dev/sandbox`](https://www.npmjs.com/package/@hatchet-dev/sandbox), developed in [hatchet-dev/hatchet](https://github.com/hatchet-dev/hatchet/tree/main/sdks/typescript-sandbox). Its README has the full API.
 
 ## Run the provider
 

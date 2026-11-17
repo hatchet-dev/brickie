@@ -65,6 +65,9 @@ step "provider image"
 docker build -q -t brickie:e2e . >/dev/null
 kind load docker-image brickie:e2e --name "$CLUSTER" >/dev/null
 ok "brickie:e2e is on the node"
+printf 'FROM alpine:3\nRUN apk add --no-cache tar\nUSER 1000\n' | docker build -q -t brickie-e2e-nonroot:local - >/dev/null
+kind load docker-image brickie-e2e-nonroot:local --name "$CLUSTER" >/dev/null
+ok "brickie-e2e-nonroot:local (GNU tar, uid 1000) is on the node"
 
 step "provider deployment"
 HOST_IP=$(docker run --rm --network kind alpine:3 getent ahostsv4 host.docker.internal 2>/dev/null | awk 'NR==1{print $1}' || true)
@@ -125,7 +128,7 @@ cd examples/typescript
 export DEMO_BIG_MB=1
 case "${1:-}" in
   fs) pnpm fs-demo ;;
-  "") pnpm fs-demo && pnpm demo && pnpm --filter @hatchet-dev/sandbox test ;;
+  "") pnpm fs-demo && pnpm demo && pnpm test && DEMO_TEMPLATE=brickie-e2e-nonroot:local pnpm test ;;
   *) echo "usage: hack/e2e-kind.sh [fs|down]" >&2; exit 1 ;;
 esac
 echo
