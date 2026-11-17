@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -13,6 +14,8 @@ import (
 	"github.com/hatchet-dev/hatchet/pkg/operator"
 	"github.com/hatchet-dev/hatchet/pkg/operator/hostgrpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/hatchet-dev/brickie/internal/logging"
 )
 
 const (
@@ -39,7 +42,7 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 	if err != nil {
 		return err
 	}
-	host, err := hostgrpc.New(hostgrpc.WithTokenSource(exchange))
+	host, err := hostgrpc.New(hostgrpc.WithTokenSource(exchange), hostgrpc.WithLogger(logging.Hatchet()))
 	if err != nil {
 		return err
 	}
@@ -83,7 +86,7 @@ func RunOperatorProvider(ctx context.Context, opts ProviderOpts, slots int) erro
 	if err := session.Flush(ctx); err != nil {
 		return fmt.Errorf("flush action set: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "brickie: sandbox provider connected as grpc operator (worker %s)\n", session.Registration().WorkerId)
+	slog.Info("sandbox provider connected as grpc operator", "worker", session.Registration().WorkerId)
 
 	select {
 	case <-ctx.Done():
@@ -134,7 +137,7 @@ func (p *operatorProvider) execute(action *operatorclient.AssignedAction) {
 		return
 	}
 	log := func(msg string) {
-		fmt.Fprintf(os.Stderr, "brickie: [%s] %s\n", action.TaskRunExternalId, msg)
+		slog.Info(msg, "run", action.TaskRunExternalId)
 	}
 	result, err := p.runner.run(tctx, action.TaskRunExternalId, payload.Input, log)
 	if err != nil {
@@ -182,6 +185,6 @@ func (p *operatorProvider) sendEvent(action *operatorclient.AssignedAction, even
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := p.session.SendStepActionEvent(ctx, event); err != nil {
-		fmt.Fprintf(os.Stderr, "brickie: send %s for %s failed: %v\n", eventType, action.TaskRunExternalId, err)
+		slog.Error("send step event failed", "event", eventType, "run", action.TaskRunExternalId, "err", err)
 	}
 }
