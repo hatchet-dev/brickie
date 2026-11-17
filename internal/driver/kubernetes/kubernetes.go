@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strconv"
@@ -86,8 +87,9 @@ type Options struct {
 	CPU, Memory, Disk resource.Quantity
 	// NodeSelector and Tolerations place sandbox pods, on top of whatever the
 	// runtime class adds.
-	NodeSelector map[string]string
-	Tolerations  []corev1.Toleration
+	NodeSelector   map[string]string
+	Tolerations    []corev1.Toleration
+	InitContainers []corev1.Container
 }
 
 type Driver struct {
@@ -178,7 +180,7 @@ func New(opts Options) (*Driver, error) {
 		for range time.Tick(time.Hour) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			if err := d.ensureServerCert(ctx); err != nil {
-				fmt.Fprintf(os.Stderr, "brickie: renew sandbox tls secret: %v\n", err)
+				slog.Error("renew sandbox tls secret", "err", err)
 			}
 			cancel()
 		}
@@ -208,7 +210,7 @@ func (d *Driver) detectRuntime(ctx context.Context) error {
 			}
 		}
 		if d.runtimeClass == "" {
-			fmt.Fprintf(os.Stderr, "brickie: none of the %s runtime classes found; sandboxes run with the default runtime\n", strings.Join(autoRuntimeClasses, ", "))
+			slog.Warn("no sandbox runtime class found; sandboxes run with the default runtime", "tried", strings.Join(autoRuntimeClasses, ", "))
 			return nil
 		}
 	default:
@@ -221,7 +223,7 @@ func (d *Driver) detectRuntime(ctx context.Context) error {
 		}
 		d.runtimeClass = rc
 	}
-	fmt.Fprintf(os.Stderr, "brickie: sandboxes run under runtime class %s\n", d.runtimeClass)
+	slog.Info("sandboxes run under runtime class", "runtimeClass", d.runtimeClass)
 	return nil
 }
 
@@ -351,12 +353,12 @@ func (d *Driver) podSpec(image string) corev1.PodSpec {
 	spec := corev1.PodSpec{
 		AutomountServiceAccountToken: &no,
 		SecurityContext:              &corev1.PodSecurityContext{SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
-		InitContainers: []corev1.Container{{
+		InitContainers: append(append([]corev1.Container{}, d.opts.InitContainers...), corev1.Container{
 			Name:         "sandboxd",
 			Image:        sandboxd.Image,
 			Command:      []string{"/bin/sh", "-c", "cp " + sandboxd.ImageBinary + " /brickie/sandboxd"},
 			VolumeMounts: []corev1.VolumeMount{{Name: "brickie", MountPath: "/brickie"}},
-		}},
+		}),
 		Containers: []corev1.Container{
 			{
 				Name:            "sandbox",
@@ -459,7 +461,7 @@ func (d *Driver) ensurePool(ctx context.Context, image string) (string, error) {
 		return "", fmt.Errorf("warm pool for %s: %w", image, err)
 	}
 	d.pools[image] = name
-	fmt.Fprintf(os.Stderr, "brickie: warm pool %s serves image %s (%d replicas)\n", name, image, replicas)
+	slog.Info("warm pool ready", "pool", name, "image", image, "replicas", replicas)
 	return name, nil
 }
 

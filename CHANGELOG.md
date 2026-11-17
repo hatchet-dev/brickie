@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+### Added
+
+- `--log-format` (`BRICKIE_LOG_FORMAT`): `json`, the default, one object per line with `time`, `level`, `msg` and fields such as `run` for turn logs; or `text` for a terminal, which `hack/run-demo.sh` uses. The Hatchet client's own logs follow the same format.
+- `--sandbox-init-containers` (`BRICKIE_SANDBOX_INIT_CONTAINERS`): a JSON list of Kubernetes containers run as init containers in every sandbox pod, before sandboxd and the sandbox container, under the pod's runtime class. For operator checks such as a FIPS verification script.
+
+### Fixed
+
+- Stopping the provider with SIGTERM logged `Error: context canceled` followed by the full command usage. It now logs one "shutting down" line and exits 0.
+
 ## [0.1.7] - 2026-11-17
 
 ### Added

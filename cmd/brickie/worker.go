@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"time"
@@ -64,6 +66,7 @@ type providerConfig struct {
 	cpu, memory, disk string
 	nodeSelector      string
 	tolerations       string
+	initContainers    string
 	sandboxdImage     string
 }
 
@@ -89,6 +92,7 @@ func registerFlags(cmd *cobra.Command) {
 	f.StringVar(&providerCfg.egress, "sandbox-egress", envOr("BRICKIE_SANDBOX_EGRESS", "internet"), "kubernetes: what sandboxes may reach: internet (public addresses and cluster DNS) or none")
 	f.StringVar(&providerCfg.nodeSelector, "sandbox-node-selector", envOr("BRICKIE_SANDBOX_NODE_SELECTOR", ""), "kubernetes: node labels sandbox pods are placed on, as key=value pairs separated by commas")
 	f.StringVar(&providerCfg.tolerations, "sandbox-tolerations", envOr("BRICKIE_SANDBOX_TOLERATIONS", ""), "kubernetes: tolerations for sandbox pods, as a JSON list of Kubernetes tolerations")
+	f.StringVar(&providerCfg.initContainers, "sandbox-init-containers", envOr("BRICKIE_SANDBOX_INIT_CONTAINERS", ""), "kubernetes: init containers run in every sandbox pod before the sandbox starts, as a JSON list of Kubernetes containers")
 	f.StringVar(&providerCfg.cpu, "sandbox-cpu", envOr("BRICKIE_SANDBOX_CPU", "1"), "kubernetes: cpu limit per sandbox")
 	f.StringVar(&providerCfg.memory, "sandbox-memory", envOr("BRICKIE_SANDBOX_MEMORY", "2Gi"), "kubernetes: memory limit per sandbox")
 	f.StringVar(&providerCfg.disk, "sandbox-disk", envOr("BRICKIE_SANDBOX_DISK", "10Gi"), "kubernetes: ephemeral storage limit per sandbox, including the workspace")
@@ -103,7 +107,7 @@ func runProvider(ctx context.Context, c providerConfig) error {
 	store.Prune(ctx, 7*24*time.Hour)
 	sandboxd.Image = c.sandboxdImage
 	if c.maxFile > 3<<20 {
-		fmt.Fprintf(os.Stderr, "brickie: --max-file-bytes %d exceeds 3 MiB; set SERVER_GRPC_MAX_MSG_SIZE on the Hatchet engine to at least %d or file turns fail with a gRPC size error\n", c.maxFile, c.maxFile*4/3+1<<20)
+		slog.Warn("--max-file-bytes exceeds 3 MiB; set SERVER_GRPC_MAX_MSG_SIZE on the Hatchet engine or file turns fail with a gRPC size error", "maxFileBytes", c.maxFile, "serverGrpcMaxMsgSize", c.maxFile*4/3+1<<20)
 	}
 	var drv engine.Driver
 	switch c.driver {
@@ -116,7 +120,7 @@ func runProvider(ctx context.Context, c providerConfig) error {
 		drv = d
 	case "kubernetes":
 		if store.Local() {
-			fmt.Fprintf(os.Stderr, "brickie: --store is a directory inside the provider pod; files larger than --max-file-bytes need an object store\n")
+			slog.Warn("--store is a directory inside the provider pod; files larger than --max-file-bytes need an object store")
 		}
 		selector, err := labels.ConvertSelectorToLabelsMap(c.providerSelector)
 		if err != nil {
@@ -136,6 +140,16 @@ func runProvider(ctx context.Context, c providerConfig) error {
 		if c.tolerations != "" {
 			if err := json.Unmarshal([]byte(c.tolerations), &opts.Tolerations); err != nil {
 				return fmt.Errorf("--sandbox-tolerations: %w", err)
+			}
+		}
+		if c.initContainers != "" {
+			if err := json.Unmarshal([]byte(c.initContainers), &opts.InitContainers); err != nil {
+				return fmt.Errorf("--sandbox-init-containers: %w", err)
+			}
+			for i, ic := range opts.InitContainers {
+				if ic.Name == "" || ic.Image == "" {
+					return fmt.Errorf("--sandbox-init-containers: entry %d needs name and image", i)
+				}
 			}
 		}
 		d, err := kubernetes.New(opts)
@@ -162,7 +176,12 @@ func workerCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, cancel := cmdutils.NewInterruptContext()
 			defer cancel()
-			return runProvider(ctx, providerCfg)
+			err := runProvider(ctx, providerCfg)
+			if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+				slog.Info("shutting down: signal received")
+				return nil
+			}
+			return err
 		},
 	}
 	registerFlags(cmd)

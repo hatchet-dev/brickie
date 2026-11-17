@@ -145,7 +145,7 @@ else
       export DOCKER_HOST="$docker_host"
     fi
   fi
-  nohup ./bin/brickie worker > "$LOG_FILE" 2>&1 &
+  BRICKIE_LOG_FORMAT="${BRICKIE_LOG_FORMAT:-text}" nohup ./bin/brickie worker > "$LOG_FILE" 2>&1 &
   echo $! > "$PID_FILE"
   provider_connected() {
     provider_alive || return 2
