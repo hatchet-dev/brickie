@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-11-17
+
 ### Added
 
 - `--sandboxd-image` (`BRICKIE_SANDBOXD_IMAGE`) picks the image the sandboxd binary is taken from.
