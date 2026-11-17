@@ -14,11 +14,11 @@ var hatchet zerolog.Logger
 func Setup(format string) error {
 	switch format {
 	case "json":
-		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
-		hatchet = zerolog.New(os.Stderr).With().Timestamp().Str("component", "hatchet").Logger()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+		hatchet = zerolog.New(os.Stdout).With().Timestamp().Str("component", "hatchet").Logger()
 	case "text":
-		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
-		hatchet = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Str("component", "hatchet").Logger()
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
+		hatchet = zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout}).With().Timestamp().Str("component", "hatchet").Logger()
 	default:
 		return fmt.Errorf("--log-format %q: want json or text", format)
 	}

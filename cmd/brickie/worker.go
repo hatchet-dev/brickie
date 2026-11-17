@@ -107,7 +107,7 @@ func runProvider(ctx context.Context, c providerConfig) error {
 	store.Prune(ctx, 7*24*time.Hour)
 	sandboxd.Image = c.sandboxdImage
 	if c.maxFile > 3<<20 {
-		slog.Warn("--max-file-bytes exceeds 3 MiB; set SERVER_GRPC_MAX_MSG_SIZE on the Hatchet engine or file turns fail with a gRPC size error", "maxFileBytes", c.maxFile, "serverGrpcMaxMsgSize", c.maxFile*4/3+1<<20)
+		slog.Warn("--max-file-bytes exceeds 3 MiB, set SERVER_GRPC_MAX_MSG_SIZE on the Hatchet engine or file turns fail with a gRPC size error", "maxFileBytes", c.maxFile, "serverGrpcMaxMsgSize", c.maxFile*4/3+1<<20)
 	}
 	var drv engine.Driver
 	switch c.driver {
@@ -120,7 +120,7 @@ func runProvider(ctx context.Context, c providerConfig) error {
 		drv = d
 	case "kubernetes":
 		if store.Local() {
-			slog.Warn("--store is a directory inside the provider pod; files larger than --max-file-bytes need an object store")
+			slog.Warn("--store is a directory inside the provider pod, files larger than --max-file-bytes need an object store")
 		}
 		selector, err := labels.ConvertSelectorToLabelsMap(c.providerSelector)
 		if err != nil {
@@ -146,10 +146,15 @@ func runProvider(ctx context.Context, c providerConfig) error {
 			if err := json.Unmarshal([]byte(c.initContainers), &opts.InitContainers); err != nil {
 				return fmt.Errorf("--sandbox-init-containers: %w", err)
 			}
+			names := map[string]bool{"sandboxd": true, "sandbox": true, "tls": true}
 			for i, ic := range opts.InitContainers {
 				if ic.Name == "" || ic.Image == "" {
 					return fmt.Errorf("--sandbox-init-containers: entry %d needs name and image", i)
 				}
+				if names[ic.Name] {
+					return fmt.Errorf("--sandbox-init-containers: name %q is reserved or used twice (sandboxd, sandbox and tls belong to the pod)", ic.Name)
+				}
+				names[ic.Name] = true
 			}
 		}
 		d, err := kubernetes.New(opts)

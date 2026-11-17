@@ -210,7 +210,7 @@ func (d *Driver) detectRuntime(ctx context.Context) error {
 			}
 		}
 		if d.runtimeClass == "" {
-			slog.Warn("no sandbox runtime class found; sandboxes run with the default runtime", "tried", strings.Join(autoRuntimeClasses, ", "))
+			slog.Warn("no sandbox runtime class found, sandboxes run with the default runtime", "tried", strings.Join(autoRuntimeClasses, ", "))
 			return nil
 		}
 	default:

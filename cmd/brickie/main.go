@@ -26,6 +26,9 @@ func main() {
 	}
 	root.PersistentFlags().StringVar(&logFormat, "log-format", envOr("BRICKIE_LOG_FORMAT", "json"), "log lines as json or text")
 	root.AddCommand(workerCmd(), sandboxTLSCmd(), versionCmd())
+	if logging.Setup(envOr("BRICKIE_LOG_FORMAT", "json")) != nil {
+		_ = logging.Setup("json")
+	}
 	if err := root.Execute(); err != nil {
 		slog.Error(err.Error())
 		os.Exit(1)
