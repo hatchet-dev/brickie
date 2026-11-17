@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-11-17
+
+### Fixed
+
+- Restoring a snapshot into a sandbox that runs as a non-root user failed with `tar: .: Cannot utime: Operation not permitted` when the image ships GNU tar. The restore now skips the workspace directory entry itself, so `/workspace` is never modified and only its contents are extracted. Existing snapshots are unaffected.
+
 ## [0.1.5] - 2026-11-10
 
 ### Added
