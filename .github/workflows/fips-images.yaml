@@ -1,23 +1,25 @@
 name: fips-images
 
 on:
+  workflow_call:
   workflow_dispatch:
     inputs:
       agent_sandbox_version:
         description: "agent-sandbox release tag; default: latest and the go.mod pin"
         required: false
+      rebuild:
+        description: "rebuild tags that already exist"
+        type: boolean
+        default: false
   schedule:
     - cron: "17 6 * * *"
   push:
     branches: [main]
-    paths: [.github/workflows/fips-images.yaml, hack/agent-sandbox-fips.Dockerfile, hack/sandbox-fips.Dockerfile, hack/check-fips.sh, go.mod]
+    paths: [.github/workflows/fips-images.yaml, hack/agent-sandbox-fips.Dockerfile, hack/check-fips.sh, go.mod]
 
 permissions:
   contents: read
   packages: write
-
-env:
-  UBI_PIN: "9.8"
 
 jobs:
   publish:
@@ -39,12 +41,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           AS_INPUT: ${{ inputs.agent_sandbox_version }}
+          REBUILD: ${{ inputs.rebuild }}
         run: |
           set -euo pipefail
           ghcr=ghcr.io/hatchet-dev
           build() { # dockerfile target tag [build-args...]
             local file=$1 target=$2 tag=$3; shift 3
-            docker buildx imagetools inspect "$tag" >/dev/null 2>&1 && { echo "have $tag"; return; }
+            [ "$REBUILD" = "true" ] || ! docker buildx imagetools inspect "$tag" >/dev/null 2>&1 || { echo "have $tag"; return; }
             docker buildx build --platform linux/amd64,linux/arm64 --push -f "hack/$file" ${target:+--target "$target"} -t "$tag" "$@" hack
           }
 
@@ -53,4 +56,3 @@ jobs:
             build agent-sandbox-fips.Dockerfile controller "$ghcr/agent-sandbox-controller-fips:$v" --build-arg "VERSION=$v"
             build agent-sandbox-fips.Dockerfile sandboxd "$ghcr/sandboxd-fips:$v" --build-arg "VERSION=$v"
           done
-          docker buildx build --platform linux/amd64,linux/arm64 --push -f hack/sandbox-fips.Dockerfile --build-arg "UBI=$UBI_PIN" -t "$ghcr/ubi-minimal-fips:$UBI_PIN" hack

@@ -73,7 +73,7 @@ func registerFlags(cmd *cobra.Command) {
 	f := cmd.Flags()
 	f.StringVar(&providerCfg.driver, "driver", envOr("BRICKIE_DRIVER", "docker"), "where sandboxes run: docker (the local engine) or kubernetes (agent-sandbox claims)")
 	f.StringVar(&providerCfg.image, "image", envOr("BRICKIE_SANDBOX_IMAGE", "alpine:3"), "default sandbox image")
-	f.StringVar(&providerCfg.sandboxdImage, "sandboxd-image", envOr("BRICKIE_SANDBOXD_IMAGE", sandboxd.Image), "image the sandboxd binary is taken from, for example ghcr.io/hatchet-dev/sandboxd-fips:v1.0.8")
+	f.StringVar(&providerCfg.sandboxdImage, "sandboxd-image", envOr("BRICKIE_SANDBOXD_IMAGE", sandboxd.Image), "image the sandboxd binary is taken from")
 	f.StringVar(&providerCfg.store, "store", envOr("BRICKIE_STORE", engine.DefaultStoreURL()), "bucket for snapshots, sandbox metadata, and files larger than --max-file-bytes: s3://bucket, gs://bucket, azblob://container, s3://bucket?endpoint=...&use_path_style=true for S3-compatible stores, or file:///dir on one machine")
 	f.Int64Var(&providerCfg.maxFile, "max-file-bytes", envIntOr("BRICKIE_MAX_FILE_BYTES", fsops.DefaultMaxFileBytes), "largest file files.read and files.write carry through a Hatchet task; the engine must allow the base64 payload (SERVER_GRPC_MAX_MSG_SIZE, default 4 MiB)")
 	f.DurationVar(&providerCfg.idleTTL, "sandbox-idle-ttl", envDurationOr("BRICKIE_SANDBOX_IDLE_TTL", 15*time.Minute), "destroy a sandbox after this long without a turn")

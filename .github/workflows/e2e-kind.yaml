@@ -27,13 +27,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mirror:
-    uses: ./.github/workflows/mirror-sandboxd.yaml
+  images:
+    uses: ./.github/workflows/fips-images.yaml
     permissions:
       contents: read
       packages: write
   demos:
-    needs: mirror
+    needs: images
     runs-on: ubicloud-standard-8
     timeout-minutes: 15
     steps:

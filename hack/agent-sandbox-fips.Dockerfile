@@ -1,5 +1,3 @@
-# FIPS builds of upstream agent-sandbox binaries. Context is hack/.
-#   docker build -f hack/agent-sandbox-fips.Dockerfile --build-arg VERSION=v1.0.8 --target sandboxd hack
 FROM --platform=$BUILDPLATFORM golang:1.27.3 AS build
 ARG TARGETARCH
 ARG VERSION
