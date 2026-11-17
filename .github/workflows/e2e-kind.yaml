@@ -27,13 +27,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mirror:
-    uses: ./.github/workflows/mirror-sandboxd.yaml
-    permissions:
-      contents: read
-      packages: write
   demos:
-    needs: mirror
     runs-on: ubicloud-standard-8
     timeout-minutes: 15
     steps:

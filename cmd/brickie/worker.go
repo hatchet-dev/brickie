@@ -17,6 +17,7 @@ import (
 	"github.com/hatchet-dev/brickie/internal/driver/fsops"
 	"github.com/hatchet-dev/brickie/internal/driver/kubernetes"
 	"github.com/hatchet-dev/brickie/internal/engine"
+	"github.com/hatchet-dev/brickie/internal/sandboxd"
 )
 
 func envDurationOr(key string, fallback time.Duration) time.Duration {
@@ -63,6 +64,7 @@ type providerConfig struct {
 	cpu, memory, disk string
 	nodeSelector      string
 	tolerations       string
+	sandboxdImage     string
 }
 
 var providerCfg providerConfig
@@ -71,6 +73,7 @@ func registerFlags(cmd *cobra.Command) {
 	f := cmd.Flags()
 	f.StringVar(&providerCfg.driver, "driver", envOr("BRICKIE_DRIVER", "docker"), "where sandboxes run: docker (the local engine) or kubernetes (agent-sandbox claims)")
 	f.StringVar(&providerCfg.image, "image", envOr("BRICKIE_SANDBOX_IMAGE", "alpine:3"), "default sandbox image")
+	f.StringVar(&providerCfg.sandboxdImage, "sandboxd-image", envOr("BRICKIE_SANDBOXD_IMAGE", sandboxd.Image), "image the sandboxd binary is taken from")
 	f.StringVar(&providerCfg.store, "store", envOr("BRICKIE_STORE", engine.DefaultStoreURL()), "bucket for snapshots, sandbox metadata, and files larger than --max-file-bytes: s3://bucket, gs://bucket, azblob://container, s3://bucket?endpoint=...&use_path_style=true for S3-compatible stores, or file:///dir on one machine")
 	f.Int64Var(&providerCfg.maxFile, "max-file-bytes", envIntOr("BRICKIE_MAX_FILE_BYTES", fsops.DefaultMaxFileBytes), "largest file files.read and files.write carry through a Hatchet task; the engine must allow the base64 payload (SERVER_GRPC_MAX_MSG_SIZE, default 4 MiB)")
 	f.DurationVar(&providerCfg.idleTTL, "sandbox-idle-ttl", envDurationOr("BRICKIE_SANDBOX_IDLE_TTL", 15*time.Minute), "destroy a sandbox after this long without a turn")
@@ -98,6 +101,7 @@ func runProvider(ctx context.Context, c providerConfig) error {
 	}
 	defer func() { _ = store.Close() }()
 	store.Prune(ctx, 7*24*time.Hour)
+	sandboxd.Image = c.sandboxdImage
 	if c.maxFile > 3<<20 {
 		fmt.Fprintf(os.Stderr, "brickie: --max-file-bytes %d exceeds 3 MiB; set SERVER_GRPC_MAX_MSG_SIZE on the Hatchet engine to at least %d or file turns fail with a gRPC size error\n", c.maxFile, c.maxFile*4/3+1<<20)
 	}

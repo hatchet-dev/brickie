@@ -1,5 +1,5 @@
 // Every build of brickie runs in FIPS 140-3 mode; release builds also pin the
-// certified Go Cryptographic Module (see .goreleaser.yml).
+// certified Go Cryptographic Module (see .goreleaser.yml and Dockerfile).
 //
 //go:debug fips140=on
 package main

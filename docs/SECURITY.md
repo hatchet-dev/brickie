@@ -50,6 +50,7 @@ The agent's code runs in the sandbox. Everything the sandbox can reach is the at
 
 - Every file path is confined twice. The provider rejects paths that leave the workspace lexically and escapes each path segment once, so a name is always the literal name. Reads, writes, and listings then go through sandboxd, which resolves symlinks and rejects escapes with 403. `mkdir`, `rename`, `copy`, and `remove` run as commands inside the sandbox; each first resolves the nearest existing ancestor of its paths and refuses to act unless it lies under the workspace, and `remove` unlinks a symlink instead of following it. Only the agent itself, inside its own sandbox, could race that check, and it already owns everything outside the workspace there.
 - A snapshot is a tar made by `tar` inside the sandbox. It is extracted inside the sandbox, never on the provider, and only its contents: the archive cannot change `/workspace` itself, which the sandbox user does not own. A hostile archive can only fill the sandbox's own workspace volume, which has a size limit.
+- brickie, sandboxd and the agent-sandbox controller are FIPS 140-3 builds. The default sandbox image, `alpine:3`, is not: brickie runs no cryptography inside the sandbox image, so bring a FIPS base image when the agent's own code must use FIPS cryptography.
 - The store holds snapshots, metadata, and staged files. Only the provider has its credentials. On `file://` the SDK must be on the same machine; this is for development only.
 - `delete` (`$delete`) removes a sandbox and everything the store holds for it: the live container or pod first, then its metadata, so a `connect` from that moment answers "unknown sandbox" rather than ever starting an empty workspace, then its latest pointer, then its snapshots, stored results, and staged files, which all live under the sandbox's own prefix. Every step tolerates a missing object, so a retry finishes a delete that failed part way, and deleting an unknown sandbox succeeds. A fork that has not changed anything yet still points at the deleted sandbox's snapshot and can no longer `connect`; a fork that has checkpointed keeps its own copy under its own prefix and must be deleted separately. Objects left by a delete that failed every retry have no pointer and fall to the 7-day prune.
 - The provider deletes its own store objects older than 7 days at start. A sandbox whose latest pointer was written within those 7 days keeps its metadata and the snapshot the pointer names, however old they are. Staged files and turn results are kept until then so a retried turn can still read its input, and a replayed read can be signed again; on S3 a one-day lifecycle rule on the staging prefix is the recommended shorter bound.
@@ -73,6 +74,27 @@ The agent-sandbox controller creates the pods and the NetworkPolicy. Its permiss
 - A sandbox expires after its idle TTL. The provider sets `spec.lifecycle.shutdownTime` on the claim to the TTL before every turn, renews it every half TTL for as long as the turn runs (restore, command, file transfer, and checkpoint included), and sets it once more after the turn, so no turn loses its pod to expiry and the idle window starts when the turn ends; the agent-sandbox controller deletes the pod when the time passes, even if the provider is down. `kill()` deletes the claim at once.
 - A pod that was replaced (node drain, eviction) loses its workspace. The provider detects this through a marker file, written only after a restore succeeded and never extracted from a snapshot, and refuses to run a turn on it. `connect` restores the latest snapshot into the new pod. A fork records its inherited snapshot as its latest at creation, so it can be connected again even before its first change.
 - A failure to record the latest snapshot fails the turn after three attempts, and a store that cannot be read fails a connect, so a sandbox never silently comes back empty. A turn that stored its snapshot records its result beside it, together with the latest pointer as it stood, before publishing, so a retry of the same run (Hatchet keeps the run id) returns the stored result instead of running the command a second time, and publishes its snapshot only if no later turn has published since. A store that cannot be read for that record fails the retry rather than running the command again.
+
+## Verifying images
+
+Every image we publish is signed with [cosign](https://docs.sigstore.dev/cosign/) keyless signing, bound to the GitHub Actions OIDC identity of the workflow run, and each platform manifest carries a syft SPDX SBOM as a signed in-toto attestation. `ghcr.io/hatchet-dev/brickie` is signed by `release.yaml` on a `v*` tag; `ghcr.io/hatchet-dev/sandboxd` and `ghcr.io/hatchet-dev/agent-sandbox-controller` are signed by a workflow run on `main`.
+
+```sh
+cosign verify ghcr.io/hatchet-dev/brickie:0.1.6 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/hatchet-dev/brickie/\.github/workflows/release\.yaml@refs/tags/v'
+
+cosign verify ghcr.io/hatchet-dev/sandboxd:v1.0.8 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/hatchet-dev/brickie/\.github/workflows/[^@]+@refs/heads/main$'
+
+digest=$(docker buildx imagetools inspect ghcr.io/hatchet-dev/brickie:0.1.6 --format '{{json .Manifest}}' \
+  | jq -r '.manifests[] | select(.platform.architecture == "amd64") | .digest')
+cosign verify-attestation --type spdxjson "ghcr.io/hatchet-dev/brickie@$digest" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/hatchet-dev/brickie/\.github/workflows/release\.yaml@refs/tags/v' \
+  | jq -r .payload | base64 -d | jq .predicate > sbom.spdx.json
+```
 
 ## What to check when a boundary moves
 

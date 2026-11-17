@@ -72,7 +72,7 @@ helm install brickie hatchet/brickie --namespace brickie --create-namespace \
   --set store='s3://my-bucket?prefix=brickie/'
 ```
 
-Either way, snapshots, sandbox metadata, and large files live in `--store`: a bucket in production, a local directory on a laptop. `brickie worker --help` lists every flag and its `BRICKIE_*` environment variable. Release builds run in FIPS 140-3 mode with the certified Go Cryptographic Module; `brickie version` shows it.
+Either way, snapshots, sandbox metadata, and large files live in `--store`: a bucket in production, a local directory on a laptop. `brickie worker --help` lists every flag and its `BRICKIE_*` environment variable. Every binary and image runs in FIPS 140-3 mode with the certified Go Cryptographic Module; `brickie version` shows it.
 
 ## How it works
 

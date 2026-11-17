@@ -41,6 +41,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: CGO_ENABLED=0 go build -o bin/brickie ./cmd/brickie
+      - run: hack/ensure-sandboxd-image.sh
       - name: Start Hatchet and the provider on the Docker driver
         run: hack/run-demo.sh up
         env:

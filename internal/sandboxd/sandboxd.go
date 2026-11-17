@@ -27,14 +27,10 @@ import (
 	processv1 "sigs.k8s.io/agent-sandbox/packages/sandboxd/spec/process/v1"
 )
 
-// Upstream publishes only a moving latest-main tag from its staging registry,
-// so the index digest is what is pinned. Image is our mirror of exactly that
-// digest, copied by .github/workflows/mirror-sandboxd.yaml.
-const (
-	digest   = "sha256:141be71c5a3106cdd2cd3d33461acaa50a3e9945d3611239e91f803e06350bfa"
-	Upstream = "us-central1-docker.pkg.dev/k8s-staging-images/agent-sandbox/sandboxd@" + digest
-	Image    = "ghcr.io/hatchet-dev/sandboxd@" + digest
-)
+// Image is our FIPS build of the agent-sandbox release pinned in go.mod and in
+// the chart's agent-sandbox.image.tag; the three must move together.
+// --sandboxd-image replaces it.
+var Image = "ghcr.io/hatchet-dev/sandboxd:v1.0.8"
 
 const (
 	ImageBinary = "/usr/local/bin/sandboxd"

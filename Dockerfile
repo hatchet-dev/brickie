@@ -14,6 +14,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GOFIPS140=v1.0.0 \
     && hack/check-fips.sh /brickie
 
 FROM gcr.io/distroless/static-debian12:nonroot
+LABEL run.hatchet.fips=true
 COPY --from=build /brickie /brickie
 ENTRYPOINT ["/brickie"]
 CMD ["worker"]
