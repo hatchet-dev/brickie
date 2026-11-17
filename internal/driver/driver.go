@@ -38,7 +38,7 @@ func Run(ctx context.Context, c *sandboxd.Client, req engine.TurnRequest, fresh 
 		if err := c.Write(ctx, restoreName, req.Snapshot, req.SnapshotSize); err != nil {
 			return engine.TurnResponse{}, fmt.Errorf("restore snapshot: %w", err)
 		}
-		res, err := c.Run(ctx, []string{"sh", "-c", "tar -xzf " + restoreName + " --exclude=./" + fsops.Marker + " && rm -f " + restoreName}, 0)
+		res, err := c.Run(ctx, []string{"sh", "-c", "tar -xzf " + restoreName + " --strip-components=1 --exclude=./" + fsops.Marker + " && rm -f " + restoreName}, 0)
 		if err != nil {
 			return engine.TurnResponse{}, fmt.Errorf("restore snapshot: %w", err)
 		}
