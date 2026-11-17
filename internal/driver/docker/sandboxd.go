@@ -3,11 +3,11 @@ package docker
 import (
 	"archive/tar"
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -17,7 +17,8 @@ import (
 )
 
 // ensureSandboxd returns a host path to the sandboxd binary for the engine's
-// architecture, extracting it from the pinned image on first use.
+// architecture, cached by the image ID so a rebuilt tag is picked up. The pull
+// may fail offline; the local image is then used as it is.
 func (d *Driver) ensureSandboxd(ctx context.Context) (string, error) {
 	info, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
@@ -31,18 +32,21 @@ func (d *Driver) ensureSandboxd(ctx context.Context) (string, error) {
 	if err != nil {
 		cacheDir = os.TempDir()
 	}
-	ref := sha256.Sum256([]byte(sandboxd.Image))
-	dest := filepath.Join(cacheDir, "brickie", fmt.Sprintf("sandboxd-%s-%x", arch, ref[:6]))
+	platform := ocispec.Platform{OS: "linux", Architecture: arch}
+	pull, pullErr := d.cli.ImagePull(ctx, sandboxd.Image, client.ImagePullOptions{Platforms: []ocispec.Platform{platform}})
+	if pullErr == nil {
+		pullErr = pull.Wait(ctx)
+	}
+	img, err := d.cli.ImageInspect(ctx, sandboxd.Image)
+	if err != nil {
+		if pullErr != nil {
+			return "", fmt.Errorf("pull sandboxd: %w", pullErr)
+		}
+		return "", fmt.Errorf("inspect sandboxd: %w", err)
+	}
+	dest := filepath.Join(cacheDir, "brickie", fmt.Sprintf("sandboxd-%s-%s", arch, strings.TrimPrefix(img.ID, "sha256:")[:12]))
 	if _, err := os.Stat(dest); err == nil {
 		return dest, nil
-	}
-	platform := ocispec.Platform{OS: "linux", Architecture: arch}
-	pull, err := d.cli.ImagePull(ctx, sandboxd.Image, client.ImagePullOptions{Platforms: []ocispec.Platform{platform}})
-	if err != nil {
-		return "", fmt.Errorf("pull sandboxd: %w", err)
-	}
-	if err := pull.Wait(ctx); err != nil {
-		return "", fmt.Errorf("pull sandboxd: %w", err)
 	}
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config:   &container.Config{Image: sandboxd.Image},
