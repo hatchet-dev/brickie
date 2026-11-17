@@ -24,14 +24,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  images:
-    uses: ./.github/workflows/fips-images.yaml
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
   sdk:
-    needs: images
     runs-on: ubicloud-standard-4
     timeout-minutes: 10
     steps:
@@ -48,6 +41,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: CGO_ENABLED=0 go build -o bin/brickie ./cmd/brickie
+      - run: hack/ensure-sandboxd-image.sh
       - name: Start Hatchet and the provider on the Docker driver
         run: hack/run-demo.sh up
         env:

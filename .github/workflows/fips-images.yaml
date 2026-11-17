@@ -1,16 +1,11 @@
 name: fips-images
 
 on:
-  workflow_call:
   workflow_dispatch:
     inputs:
       agent_sandbox_version:
         description: "agent-sandbox release tag; default: latest and the go.mod pin"
         required: false
-      rebuild:
-        description: "rebuild tags that already exist"
-        type: boolean
-        default: false
   schedule:
     - cron: "17 6 * * *"
   push:
@@ -38,30 +33,19 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       - id: build
         name: Build the FIPS images
         env:
           GH_TOKEN: ${{ github.token }}
           AS_INPUT: ${{ inputs.agent_sandbox_version }}
-          REBUILD: ${{ inputs.rebuild }}
-          ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
         run: |
           set -euo pipefail
           ghcr=ghcr.io/hatchet-dev
-          # On main a tag only counts if it carries a signature from main; a tag first
-          # pushed by a pull request run is rebuilt and signed here.
-          have() {
-            if [ "$ON_MAIN" = true ]; then
-              cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-                --certificate-identity-regexp "^https://github.com/$GITHUB_REPOSITORY/\.github/workflows/[^@]+@refs/heads/main\$" "$1" >/dev/null 2>&1
-            else
-              docker buildx imagetools inspect "$1" >/dev/null 2>&1
-            fi
-          }
+          # A tag that exists is never written again. A fix to the recipe ships under
+          # the next upstream release, or a new tag.
           build() { # dockerfile target tag [build-args...]
             local file=$1 target=$2 tag=$3; shift 3
-            [ "$REBUILD" = "true" ] || ! have "$tag" || { echo "have $tag"; return; }
+            ! docker buildx imagetools inspect "$tag" >/dev/null 2>&1 || { echo "have $tag"; return; }
             docker buildx build --platform linux/amd64,linux/arm64 --push -f "hack/$file" ${target:+--target "$target"} -t "$tag" "$@" hack
             echo "$tag" >> "$RUNNER_TEMP/built"
           }
@@ -72,7 +56,7 @@ jobs:
             build agent-sandbox-fips.Dockerfile sandboxd "$ghcr/sandboxd:$v" --build-arg "VERSION=$v"
           done
           { echo 'images<<EOF'; cat "$RUNNER_TEMP/built" 2>/dev/null || true; echo EOF; } >> "$GITHUB_OUTPUT"
-      - if: github.ref == 'refs/heads/main' && steps.build.outputs.images != ''
+      - if: steps.build.outputs.images != ''
         uses: ./.github/actions/sign-image
         with:
           images: ${{ steps.build.outputs.images }}
