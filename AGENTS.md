@@ -12,7 +12,7 @@ brickie runs agent sandboxes as Hatchet durable tasks. The README covers how to 
 - `examples/typescript`: the demo session and the end-to-end test suite, both on the published `@hatchet-dev/sandbox` SDK, which lives in `hatchet-dev/hatchet` under `sdks/typescript-sandbox`
 - `docker-compose.yml`: Hatchet lite v0.110.5 + Postgres with gRPC operators enabled; the provider runs on the host and talks to the local Docker engine
 - `hack/run-demo.sh`: first-run setup + the demo session on Docker; `hack/e2e-kind.sh`: the same demos against the Kubernetes driver on a kind cluster
-- `docs/SECURITY.md`: trust boundaries and controls; update it when a boundary moves
+- `docs/`: the Fumadocs site at hatchet-dev.github.io/brickie, static export deployed by `.github/workflows/docs.yaml` on push to main. Pages are MDX in `docs/content`, short and in full sentences like the README. `docs/content/security.mdx` is the security model, update it when a boundary moves. The flag table in `docs/content/install/configuration.mdx` mirrors `registerFlags` in `cmd/brickie/worker.go`, change both.
 - `Dockerfile`: the provider image, `ghcr.io/hatchet-dev/brickie`, which also runs as the TLS proxy in every sandbox pod. The Helm chart that deploys it lives in `hatchet-charts` as `charts/brickie`; a release here needs its `appVersion` bumped there.
 
 ## Build and check
@@ -20,6 +20,7 @@ brickie runs agent sandboxes as Hatchet durable tasks. The README covers how to 
 ```bash
 go build ./... && go vet ./...
 pnpm install && pnpm -r typecheck
+pnpm --filter brickie-docs build
 ```
 
 Build binaries to /tmp or use `go install`, do not commit binaries.

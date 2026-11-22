@@ -1,0 +1,17 @@
+{
+  "title": "Brickie docs",
+  "pages": [
+    "---Start---",
+    "index",
+    "quickstart",
+    "install",
+    "---Understand---",
+    "architecture",
+    "drivers",
+    "wire-contract",
+    "security",
+    "---Develop---",
+    "extending",
+    "contributing"
+  ]
+}

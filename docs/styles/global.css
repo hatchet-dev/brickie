@@ -1,0 +1,92 @@
+@layer theme, base, flow-base, components, utilities;
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+@import "./flow-tokens.css";
+
+@source "../node_modules/fumadocs-ui/dist/**/*.js";
+
+:root {
+  --navy: 228 61% 10%;
+  --cyan: 212 100% 86%;
+  --blue: 212 100% 60%;
+  --magenta: 287 69% 57%;
+  --yellow: 69 77% 47%;
+  --green: 193 100% 27%;
+  --opacity-2: 0.08;
+  --opacity-5: 0.32;
+  --opacity-8: 0.72;
+  --brand: hsl(var(--navy));
+  --link: hsl(214 90% 46%);
+  --font-mono: var(--font-dm-mono), ui-monospace, SFMono-Regular, monospace;
+  --color-fd-primary: hsl(var(--blue));
+  --color-fd-ring: hsl(var(--blue));
+}
+
+.dark {
+  --brand: hsl(var(--cyan));
+  --link: hsl(210 100% 76%);
+  --fg: 213 25% 90%;
+  --surface: 228 61% 10%;
+  --surface-2: 227 88% 6%;
+  --color-fd-background: hsl(var(--surface));
+  --color-fd-foreground: hsl(var(--fg));
+  --color-fd-card: hsl(var(--surface-2));
+  --color-fd-popover: hsl(var(--surface-2));
+  --color-fd-primary: hsl(var(--blue));
+  --color-fd-primary-foreground: hsl(var(--surface));
+  --color-fd-secondary: hsl(212 100% 90% / 0.06);
+  --color-fd-muted: hsl(212 100% 90% / 0.04);
+  --color-fd-muted-foreground: hsl(213 20% 66%);
+  --color-fd-accent: hsl(212 100% 90% / 0.08);
+  --color-fd-border: hsl(212 100% 85% / 0.1);
+  --color-fd-ring: hsl(var(--blue));
+}
+
+@theme inline {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-dm-mono), ui-monospace, SFMono-Regular, monospace;
+}
+
+#nd-page .prose a:not(:has(code)) {
+  color: var(--link);
+}
+
+a[href^="https://scira.ai"] {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  #nd-docs-layout {
+    grid-template-columns:
+      0
+      var(--fd-sidebar-col)
+      minmax(0, 1fr)
+      var(--fd-toc-width)
+      0 !important;
+  }
+}
+
+#nd-sidebar [data-radix-scroll-area-viewport] :is(a[href], button) {
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
+  border-radius: 7px;
+  gap: 0.5rem;
+}
+
+.dark #nd-sidebar [data-radix-scroll-area-viewport] :is(a[href], button) {
+  color: #93a3c2;
+}
+
+.dark #nd-sidebar [data-radix-scroll-area-viewport] :is(a[href], button):hover {
+  background-color: rgba(255, 255, 255, 0.05);
+  color: #e7eefb;
+}
+
+.dark #nd-sidebar a[href][data-active="true"] {
+  background-color: rgba(51, 146, 255, 0.16);
+  color: #7cb8ff;
+  font-weight: 600;
+}

@@ -1,0 +1,44 @@
+---
+title: Extending
+description: Write a driver for another sandbox backend.
+icon: Puzzle
+---
+
+A driver is the only piece of Brickie that knows how a sandbox is started and reached. Everything else, the turn contract, the store, snapshots, file confinement and the Hatchet session, is shared. Adding a backend means implementing one small interface.
+
+## The interface
+
+```go
+// internal/engine/types.go
+type Driver interface {
+	RunTurn(ctx context.Context, req TurnRequest) (TurnResponse, error)
+	Live(ctx context.Context) map[string]time.Time
+}
+```
+
+`TurnRequest` carries the sandbox ID and name, the image, the function and its JSON input, a reader for the snapshot to restore into a fresh sandbox, a writer that receives the workspace tar after a mutating turn, the idle TTL, metadata and a log callback. `TurnResponse` returns the function's JSON output, whether the workspace was snapshotted, and phase timings. `Live` returns the sandboxes the driver has running with the time each last ran a turn.
+
+## What the engine does before you
+
+The engine answers `$list`, `$delete` and `$fs.presign` from the store without calling the driver. It serializes turns per sandbox, validates the sandbox ID, streams snapshots to and from the store, records results so retries are idempotent and moves the latest pointer. A driver never sees two turns on one sandbox at once.
+
+## What a driver does
+
+1. Handle `$destroy` by removing the sandbox.
+2. On `$create` and `$connect`, find the sandbox or start one, and work out whether it is fresh. A fresh sandbox gets the snapshot restored into it.
+3. On any other function, fail if the sandbox is not running.
+4. Get a `*sandboxd.Client` for the sandbox and call `driver.Run(ctx, client, req, fresh, timings, driver.Options{MaxFileBytes, Staging})`. That restores the snapshot, runs the function and streams the checkpoint. Record `claim`, `restore`, `exec` and `checkpoint` timings.
+
+If your backend runs [sandboxd](https://github.com/kubernetes-sigs/agent-sandbox/blob/main/packages/sandboxd/USER_GUIDE.md) as the sandbox process, that is the whole job. `internal/driver/docker` is the small reference, `internal/driver/kubernetes` the full one with warm pools, mutual TLS and runtime classes.
+
+If your backend cannot run sandboxd, you need your own way to run commands and move files that keeps the same guarantees. Read the [security page](/security) first. Every byte from the sandbox is hostile, paths are confined twice, and the provider never follows a redirect from a sandbox.
+
+## Wire it in
+
+Driver selection is a `switch` on `--driver` in `cmd/brickie/worker.go`. Add a case that builds your driver from its own flags and register those flags in `registerFlags` with a `BRICKIE_*` environment variable each. The result goes to `engine.RunOperatorProvider`.
+
+## Keep the contract
+
+The SDK stays thin. It triggers the `brickie-sandbox` task by name and never chooses a provider or a driver. A new driver must not change the [wire contract](/wire-contract). If it has to, the change goes to the SDK in [hatchet-dev/hatchet](https://github.com/hatchet-dev/hatchet/tree/main/sdks/typescript-sandbox) as well and stays backwards compatible, with optional fields and tolerant reads.
+
+Then run both demos against your driver. `hack/run-demo.sh` and `hack/run-demo.sh fs` on Docker, and the e2e suite in `examples/typescript/test` with `pnpm test`. The [contributing page](/contributing) has the rest.

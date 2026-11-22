@@ -1,0 +1,213 @@
+---
+title: Wire contract
+description: What the SDK sends to the provider and what it gets back, field by field.
+icon: Cable
+---
+
+The SDK and the provider never talk to each other directly. Everything goes through one Hatchet task called `brickie-sandbox`. The SDK starts a run of that task with a JSON input, and the provider answers with a JSON output. This page describes that input and that output.
+
+On the provider side the shapes live in `internal/engine/types.go`. On the SDK side they are the Zod schemas in `@hatchet-dev/sandbox/wire`.
+
+There is no version number on the contract. Changes are only ever additions, a new optional field or a new function, and both sides ignore what they do not know. A newer SDK works with an older provider, it just cannot use the newer fields.
+
+## The task
+
+| | |
+| --- | --- |
+| Task name | `brickie-sandbox`, in the tenant's namespace |
+| Action id | `brickie-sandbox:brickie-sandbox` |
+| Timeout | 24 hours per run, set by the provider when it registers the task |
+| Retries | 2, set the same way |
+| Concurrency | one provider per tenant, `--slots` runs at a time, one turn at a time per sandbox |
+
+Before its first call, the SDK checks which task is registered in the tenant. It looks for `hatchet-sandbox` first, which is what the Hatchet Cloud sandbox operator registers, and uses `brickie-sandbox` otherwise. So the same SDK works against Cloud and against a Brickie provider. The check happens once per Hatchet client.
+
+Inside a durable task the SDK starts the run as a durable child, so on replay Hatchet hands back the recorded result. Outside a durable task, or when the SDK explicitly needs a fresh answer, it starts a plain run. The input is the same either way.
+
+## Input
+
+The task input is one JSON object. The provider reads it as `TurnInput`.
+
+```json
+{
+  "fn": "$command",
+  "input": { "cmd": "make test", "timeoutMs": 600000 },
+  "sandboxId": "conv-42",
+  "image": "alpine:3",
+  "snapshotId": "conv-41/0193a2f1-…",
+  "metadata": { "team": "search" },
+  "idleTtlMs": 1800000,
+  "inheritMetadata": true,
+  "resources": { "vcpu": 2, "memoryMib": 4096, "diskMib": 20480 }
+}
+```
+
+| Field | Type | Used by | Meaning |
+| --- | --- | --- | --- |
+| `fn` | string | all | Which function to run. The list is below. |
+| `input` | object | all | The function's own arguments. `{}` when it has none. |
+| `sandboxId` | string | all but `$list` | Which sandbox. Required everywhere except `$create`, where it is optional and the provider makes one from the run id when it is missing. Must match `^[a-z0-9][a-z0-9-]{0,62}$`. |
+| `image` | string | `$create`, `$connect` | The container image. Empty means the provider's `--image`. Ignored when the sandbox is already running. |
+| `snapshotId` | string | `$create` | Start the new sandbox from this snapshot. This is how a fork is made. |
+| `metadata` | map of strings | `$create` | Tags saved with the sandbox. `$list` and `$delete` match on them. |
+| `idleTtlMs` | integer | `$create` | How long the sandbox may sit idle before it is removed. Above `--max-sandbox-idle-ttl` the create fails. |
+| `inheritMetadata` | boolean | `$create` | Together with `snapshotId`, copy the metadata of the sandbox that made the snapshot. Keys in `metadata` win. |
+| `resources` | object | none | `vcpu`, `memoryMib`, `diskMib`. Brickie ignores this today. Limits come from the provider's flags. |
+
+The SDK also tags every run with Hatchet run metadata, `hatchet.sandbox.fn`, `hatchet.sandbox.id`, `hatchet.sandbox.image` and `hatchet.sandbox.from`, plus the sandbox's own metadata. That is for filtering in the dashboard. The provider does not read it.
+
+## Output
+
+The task output is one JSON object. The provider writes it as `TurnResult`.
+
+```json
+{
+  "output": { "stdout": "ok\n", "stderr": "", "exitCode": 0 },
+  "sandboxId": "conv-42",
+  "snapshotId": "conv-42/0193a2f1-7c3e-7a1b-9d2e-4f5a6b7c8d9e",
+  "timings": { "claim": 12, "restore": 340, "exec": 1912, "checkpoint": 410 }
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `output` | object | The function's own result. Each function's shape is below. |
+| `sandboxId` | string | The sandbox the turn ran on. For a `$create` without an id, this is the id the provider made. |
+| `snapshotId` | string | Only present when the turn changed the workspace. Always `<sandboxId>/<runId>`. |
+| `timings` | map of ms | How long each phase took. `claim` is getting a sandbox, `restore` is unpacking the snapshot, `exec` is the function itself, `checkpoint` is saving the new snapshot. A phase that did not happen is left out. |
+
+Hatchet wraps the output under the task name. The SDK reads `result["brickie-sandbox"]` and falls back to the whole object if that key is missing.
+
+When a turn fails, the task run fails, and the error message is the provider's own. Two examples are `unknown sandbox conv-42: it was not created on this provider` and `idle ttl 48h0m0s exceeds the provider maximum 24h0m0s`. Hatchet retries a failed run twice. A mistake inside a file function is different. It comes back as a normal result with an error field, see `$fs.*` below.
+
+## Functions
+
+### `$create`
+
+Starts a sandbox. `input` is `{}`.
+
+It fails when `sandboxId` is given and a sandbox with that id already exists, or when the snapshot named in `snapshotId` cannot be read. When `snapshotId` is given, the new sandbox's `latest` pointer is set to that snapshot right away, so the sandbox can be connected again even before its first change.
+
+```json
+{ "created": true }
+```
+
+### `$connect`
+
+Picks up an existing sandbox by `sandboxId`. `input` is `{}`.
+
+If the sandbox is still running, nothing is restored and `created` is `false`. If it is gone, the provider starts a new one from the sandbox's latest snapshot and `created` is `true`. If the provider has never heard of the id, the turn fails with `unknown sandbox`. It never answers with an empty workspace.
+
+```json
+{ "created": false }
+```
+
+Brickie's `$create` and `$connect` outputs do not carry `metadata` or `provider` yet, so the SDK's `Sandbox.metadata` is empty when the provider is Brickie. Adding them is an addition and is planned.
+
+### `$command`
+
+Runs `sh -c <cmd>` in `/workspace`, then takes a snapshot.
+
+A non-zero exit code is a normal result. When the command hits `timeoutMs`, `exitCode` is 124. Each of `stdout` and `stderr` is kept up to 1 MiB. Past that the stream is cut and ends with `truncated at 1048576 bytes`.
+
+```json
+{ "cmd": "make test", "timeoutMs": 600000 }
+```
+
+```json
+{ "stdout": "…", "stderr": "…", "exitCode": 0 }
+```
+
+### `$destroy`
+
+Removes the running sandbox. `input` is `{}`. The snapshots stay, and `$connect` brings the sandbox back from the latest one. In the SDK this is `kill()`.
+
+### `$delete`
+
+Removes the running sandbox and everything the store holds for it, in this order. First the pod or container, then the metadata, then the `latest` pointer, then the snapshots, stored results and staged files. Every step is fine with the object already being gone. So a delete that failed halfway finishes on retry, and deleting an unknown sandbox succeeds.
+
+In the SDK, `hatchet.sandbox.delete({ metadata })` runs one `$list` and then one `$delete` for each match.
+
+### `$list`
+
+The only function without a `sandboxId`. The provider answers it from the store and never touches a sandbox.
+
+```json
+{ "sandboxId": "conv-42", "metadata": { "team": "search" } }
+```
+
+```json
+{
+  "sandboxes": [
+    {
+      "sandboxId": "conv-42",
+      "metadata": { "team": "search" },
+      "live": true,
+      "latestSnapshot": "conv-42/0193a2f1-…",
+      "createdAt": "2026-11-21T10:12:03Z",
+      "lastUsed": "2026-11-21T10:40:51Z"
+    }
+  ]
+}
+```
+
+A sandbox matches when its metadata contains every key in the filter. `live` is true while the sandbox is running, and `lastUsed` is only there in that case.
+
+### `$fs.*`
+
+The file functions. Paths are relative to `/workspace` and cannot leave it.
+
+Each function has one input shape and one output shape. When the caller made a mistake, for example asked for a file that does not exist, the turn still succeeds and the output carries an `error` field instead.
+
+```json
+{ "error": { "code": "not_found", "message": "stat \"notes/x.md\": no such file" } }
+```
+
+The codes are `not_found`, `invalid_path`, `invalid_url`, `invalid_content`, `invalid`, `is_a_directory`, `not_a_directory`, `too_large`, `transfer_failed` and `staging_failed`. The SDK turns them into a `FilesystemError`. Anything that is not a caller mistake, such as a sandbox that cannot be reached, fails the run instead.
+
+| Function | Input | Output | Takes a snapshot |
+| --- | --- | --- | --- |
+| `$fs.read` | `{ path }` | `{ content }` as base64, or `{ stagedKey, url, size }` for a large file | no |
+| `$fs.write` | `{ files: [{ path, content }] }` or `[{ path, stagedKey }]` | `{ entries: [entry] }` | yes |
+| `$fs.list` | `{ path, depth }` | `{ entries: [entry] }` | no |
+| `$fs.stat` | `{ path }` | `{ entry }` or `{ entry: null }` | no |
+| `$fs.mkdir` | `{ path }` | `{ created }` | only when it created something |
+| `$fs.rename` | `{ path, newPath }` | `{ entry }` | yes |
+| `$fs.copy` | `{ path, newPath }` | `{ entry }` | yes |
+| `$fs.remove` | `{ path }` | `{}` | yes |
+| `$fs.download` | `{ url, path, timeoutMs }` | `{ entry }` | yes |
+| `$fs.upload` | `{ path, url, timeoutMs }` | `{}` | no |
+| `$fs.presign` | `{}` or `{ stagedKey }` | `{ stagedKey, putUrl, getUrl, expiresInMs }` | no |
+
+An `entry` is `{ name, path, type, size, mode, permissions, modifiedTime }`. `type` is `file` or `dir`.
+
+`$fs.download` and `$fs.upload` are done by the provider, not inside the sandbox, so the sandbox needs no network for them. The URL has to be https. The provider refuses URLs that point at loopback, private, link-local or unspecified addresses, and refuses redirects that leave https.
+
+## Large files
+
+A file up to `--max-file-bytes`, 2 MiB by default, travels inside the task input or output as base64. Hatchet has to accept a message that size. On a self-hosted engine that is `SERVER_GRPC_MAX_MSG_SIZE`. Anything bigger never goes through Hatchet at all.
+
+Writing a large file takes three turns. The SDK calls `$fs.presign` with `{}` and gets back a `stagedKey` under `staging/<sandboxId>/` and a `putUrl`. It uploads the bytes to that URL. Then it calls `$fs.write` with `{ path, stagedKey }`, and the provider streams the staged object into the sandbox. A key that does not start with the sandbox's own prefix is refused.
+
+Reading a large file is the same in reverse. `$fs.read` on a file over the limit copies it to the store and returns `{ stagedKey, url, size }`, and the SDK downloads from the URL.
+
+A URL is good for 15 minutes. A durable task that replays a read may hold a URL that has already expired. In that case the SDK calls `$fs.presign` with `{ stagedKey }` and gets a fresh `getUrl` for the same object. It does this as a plain run, not a durable child, so the sequence of durable children stays the same on replay. This is the one place the SDK deliberately steps outside the durable sequence.
+
+On a `file://` store the URLs are `file://` paths and the SDK reads and writes them directly. That only works when the SDK and the provider are on the same machine.
+
+## Snapshots and replay
+
+A snapshot id is `<sandboxId>/<runId>`, where the run id is the id Hatchet gave the task run. The provider stores the tar at `snapshots/<sandboxId>/<runId>`, writes the turn's result next to it along with the `latest` pointer as it was at that moment, and only then moves `latest/<sandboxId>` to the new snapshot.
+
+That order is what makes a turn safe to retry. Hatchet keeps the run id across retries, so a retried turn finds its own stored result and returns it without running the command again. If another turn published a newer snapshot in between, the retried turn's snapshot stays where it is and the pointer does not move backwards. If the provider cannot read the store to check, the retry fails rather than running the command a second time.
+
+`$create` with `snapshotId` can read any snapshot the provider can open, including one from another sandbox. The fork's own turns then write under the fork's own prefix. If the parent is deleted before the fork has taken its first snapshot, the fork has nothing left to connect to.
+
+## Changing the contract
+
+Both sides keep to these rules.
+
+- A new field is optional and fine to leave out. A new function gets a new `fn` name. Existing functions keep their shapes.
+- The SDK never picks a provider. It starts the task by name in the tenant, and whichever provider is connected to that tenant serves it.
+- Function names look like `$name` or `$fs.name`. Task names never contain a colon.
+- A change here also lands in [hatchet-dev/hatchet](https://github.com/hatchet-dev/hatchet/tree/main/sdks/typescript-sandbox), with a version bump and a changelog entry on each side.

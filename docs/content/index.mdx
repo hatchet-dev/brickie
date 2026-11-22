@@ -1,0 +1,34 @@
+---
+title: Brickie
+description: Sandboxes orchestrated as Hatchet tasks, in your own Kubernetes cluster.
+icon: House
+---
+
+import { SandboxSession } from "@/components/flow-animations/SandboxSession";
+
+<Callout type="warn" title="Beta">
+  Brickie is in beta. Flags, Helm chart values and the wire contract between the SDK and the provider may change before 1.0. Changes are listed in the [changelog](https://github.com/hatchet-dev/brickie/blob/main/CHANGELOG.md).
+</Callout>
+
+Brickie runs sandboxes as [Hatchet](https://hatchet.run) tasks. A sandbox is a container with a shell and a workspace, any image with `sh` and `tar`, `alpine:3` by default. Every call is orchestrated by a Hatchet task.
+
+Brickie is our custom sandbox provider that complements existing 3rd party providers that we support with [Hatchet Sandboxes](https://docs.hatchet.run/v1/sandboxes).
+
+The provider runs where you choose, locally on your laptop with Docker or in your own Kubernetes cluster. It makes an egress connection to a running Hatchet instance using the same mechanism like a Hatchet worker though an API token with no other inbound connection required for Brickie to work. Your code only talks to Hatchet through the [`@hatchet-dev/sandbox`](https://www.npmjs.com/package/@hatchet-dev/sandbox) SDK.
+
+All Brickie workloads run in FIPS 140-3 mode.
+
+<SandboxSession />
+
+A task calls `create`, `exec`, `kill`, and `connect`. Each call is a Hatchet task that Brickie runs against an isolated sandbox pod in your Kubernetes cluster. Killing a sandbox stores a snapshot, a fork starts from it with the same files, and connect brings the original back from the same snapshot.
+
+## Who it is for
+
+You already run tasks on [Hatchet Cloud](https://cloud.hatchet.run) or a self-hosted Hatchet, and your agents need a place to run commands and edit files. You want that place inside your own account, under your own network policy and compliance rules, with snapshots in your own bucket. Brickie gives you that without a second control plane. Hatchet is the queue, the retry logic and the dashboard, Brickie is the thing that starts and talks to sandboxes.
+
+<Cards>
+  <Card href="/quickstart" title="Quickstart" description="A sandbox session on your laptop in a few minutes." />
+  <Card href="/install" title="Install" description="Run the provider on Docker or Kubernetes." />
+  <Card href="/architecture" title="Architecture" description="Turns, snapshots and the store." />
+  <Card href="/security" title="Security" description="Trust boundaries, isolation and image verification." />
+</Cards>

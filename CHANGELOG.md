@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+### Added
+
+- Docs site at [hatchet-dev.github.io/brickie](https://hatchet-dev.github.io/brickie), built from `docs/` and deployed on every push to main. Every page is also served as Markdown, with `llms.txt` and `llms-full.txt` for agents.
+- `SECURITY.md` with the vulnerability reporting policy.
+- `CONTRIBUTING.md`, `AI_POLICY.md`, issue and pull request templates, and the vouch workflows that close pull requests from authors not in `.github/VOUCHED.td`.
+
 ## [0.1.7] - 2026-11-17
 
 ### Added

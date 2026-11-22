@@ -1,0 +1,57 @@
+---
+title: Kubernetes
+description: Deploy the provider, the agent-sandbox controller and Kata Containers with Helm.
+---
+
+The `brickie` chart in [hatchet-charts](https://github.com/hatchet-dev/hatchet-charts/tree/main/charts/brickie) deploys the provider, the [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controller and, by default, Kata Containers through [`kata-deploy`](https://kata-containers.github.io/kata-containers/installation/#install-on-kubernetes-with-helm-recommended).
+
+## Prerequisites
+
+- Kubernetes 1.30 or newer and Helm 3.8 or newer.
+- A Hatchet client token for a tenant with gRPC operators enabled.
+- An object store the provider can read and write from. S3, GCS, Azure Blob or any S3-compatible endpoint would work.
+- For Kata Containers, x86 nodes with `/dev/kvm`.
+
+## Install
+
+```bash
+helm repo add hatchet https://hatchet-dev.github.io/hatchet-charts
+helm repo update
+helm install brickie hatchet/brickie --namespace brickie --create-namespace \
+  --set hatchet.token=$HATCHET_CLIENT_TOKEN \
+  --set store='s3://my-bucket?prefix=brickie/'
+```
+
+Put the token in a Kubernetes Secret and reference it with `hatchet.existingSecret` for anything beyond a first try. Store credentials go in `storeSecret`, or use workload identity and annotate the service account with `serviceAccount.annotations`.
+
+The provider pod needs `get`, `create` and `update` on Secrets in its own namespace and in the sandbox namespace, and a few verbs on `agent-sandbox` resources. The chart creates these for you. The full list is on the [security page](/security#kubernetes-permissions).
+
+## Runtime classes
+
+Each sandbox is a pod. `sandbox.runtime` picks the RuntimeClass.
+
+| Value | RuntimeClass | Notes |
+| --- | --- | --- |
+| `kata` | `kata-clh` | Default. Installed by the bundled kata-deploy with the Cloud Hypervisor shim. Needs `/dev/kvm`. |
+| `gvisor` | `gvisor` | Set `gvisor.install: true` to install it with a DaemonSet. |
+| `nitro` | `isolated-sandbox` | EKS Nitro sandboxes. Set `kata-deploy.enabled: false`. |
+| `auto` | the first of the above that exists | Falls back to the default runtime with a warning in the log. |
+| `none` | the default runtime | Only for clusters you fully trust. |
+| any other name | that RuntimeClass | For a runtime you installed yourself. |
+
+With the default Kata runtime the chart adds a Kata configuration drop-in that boots every sandbox guest kernel with `fips=1`. Crypto libraries that follow the kernel flag, such as OpenSSL on RHEL and UBI images, then reject non-approved algorithms such as MD5. Set `kata-deploy.shims.clh.dropIn: ""` to turn that off.
+
+## Warm pools
+
+The provider keeps `sandbox.warmReplicas` ready pods per sandbox image, so a create or connect does not wait for a pod to schedule and pull. Pods are drawn from the pool and replaced in the background. 
+
+A change to the pod shape, for example new init containers or a Kata configuration change, applies to pods created from then on. Delete the warm pools once to recycle the existing ones.
+
+## Upgrade
+
+```bash
+helm repo update
+helm upgrade brickie hatchet/brickie --namespace brickie --version 0.1.5 -f values.yaml
+```
+
+Snapshots and sandbox metadata live in the store and are not touched by an upgrade. Running sandboxes keep running. Read the [chart changelog](https://github.com/hatchet-dev/hatchet-charts/blob/main/charts/brickie/CHANGELOG.md) before each upgrade, behaviour changes are marked there. The [chart README](https://github.com/hatchet-dev/hatchet-charts/blob/main/charts/brickie/README.md) lists every value.

@@ -1,0 +1,77 @@
+---
+title: Docker
+description: Run the provider on a machine with Docker.
+---
+
+import { LatestTags } from "@/components/latest-tags";
+
+<LatestTags />
+
+<Callout type="warn" title="Local testing only">
+  Sandboxes are plain containers on the local Docker engine. The provider talks to each over a loopback port published on `127.0.0.1` only. There is no VM boundary, no NetworkPolicy and no resource limit. Use the [Kubernetes driver](/install/kubernetes) for production.
+</Callout>
+
+Download the archive for your platform from the [releases page](https://github.com/hatchet-dev/brickie/releases/latest), unpack it and start the provider with the tenant token. The current release is vX.Y.Z. Archives exist for Linux and macOS on amd64 and arm64. The [quickstart](/quickstart) walks through this with a local Hatchet Lite deployment.
+
+```bash
+tar -xzf brickie_*_Linux_x86_64.tar.gz
+export HATCHET_CLIENT_TOKEN=...
+./brickie worker
+```
+
+Against a local Hatchet Lite instance which serves gRPC without TLS, also `export HATCHET_CLIENT_TLS_STRATEGY=none` before starting.
+
+The provider pulls `ghcr.io/hatchet-dev/sandboxd` once, copies the `sandboxd` binary out of it and mounts that binary into every sandbox container. The sandbox image itself only needs `sh` and `tar`. The default is `alpine:3` which can be changed with the `--image` argument or per sandbox with the SDK's `template` option.
+
+## Store
+
+Without `--store` snapshots go to `~/.brickie/store`. Files larger than `--max-file-bytes` go through the store on presigned URLs, which a directory cannot serve to a remote SDK. Point `--store` at a bucket as soon as the SDK runs on another machine.
+
+## Run it as a service
+
+The provider is stateless apart from the store. You can run it under `systemd` or anything else that restarts it. `brickie version` prints the version, commit and whether FIPS mode is on. All flags are listed on the [configuration page](/install/configuration).
+
+A `systemd` unit needs three things. A user that can reach the Docker socket, a file with the token that only that user can read, and writable directories for the store and the cached `sandboxd` binary.
+
+```bash
+sudo install -m 0755 brickie /usr/local/bin/brickie
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin brickie
+sudo install -d -m 0750 -o root -g brickie /etc/brickie
+sudo sh -c 'umask 077 && printf "HATCHET_CLIENT_TOKEN=%s\n" "$HATCHET_CLIENT_TOKEN" > /etc/brickie/env'
+sudo chgrp brickie /etc/brickie/env && sudo chmod 0640 /etc/brickie/env
+```
+
+```ini title="/etc/systemd/system/brickie.service"
+[Unit]
+Description=Brickie sandbox provider
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+User=brickie
+SupplementaryGroups=docker
+EnvironmentFile=/etc/brickie/env
+Environment=XDG_CACHE_HOME=/var/cache
+Environment=BRICKIE_STORE=file:///var/lib/brickie/store
+ExecStart=/usr/local/bin/brickie worker
+Restart=always
+RestartSec=5
+StateDirectory=brickie
+CacheDirectory=brickie
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now brickie
+journalctl -u brickie -f
+```
+
+`StateDirectory` creates `/var/lib/brickie` for the store and `CacheDirectory` creates `/var/cache/brickie`, where the provider keeps the `sandboxd` binary it copies out of the image. Both are owned by the service user, and `ProtectSystem=strict` leaves everything else read-only. Put `BRICKIE_STORE=s3://...` in the environment file instead of the unit when the SDK runs on another machine, together with the bucket credentials. The logs are JSON lines on stdout, which `journalctl` shows as is.

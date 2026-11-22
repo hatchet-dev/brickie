@@ -1,0 +1,59 @@
+.pod {
+  width: calc(var(--flow-u) * 60);
+  height: calc(var(--flow-u) * 34);
+  display: grid;
+  align-content: center;
+}
+
+[data-flow-state="claimed"] .pod {
+  border-color: var(--accent);
+}
+
+[data-flow-state="busy"] .pod {
+  border-color: var(--accent);
+}
+
+.providerDot {
+  width: calc(var(--flow-u) * 6);
+  height: calc(var(--flow-u) * 6);
+  border-radius: 50%;
+  background: var(--accent-3);
+  transition: background-color 300ms ease;
+}
+
+[data-flow-state="busy"] .providerDot {
+  background: var(--accent);
+  animation: wp-breathe 900ms ease-in-out infinite;
+}
+
+.lock {
+  font-family: var(--font-mono);
+  font-size: calc(var(--micro) * 0.85);
+  line-height: 1;
+  letter-spacing: 0.05em;
+  padding: 0.3em 0.45em;
+  border: 1px solid var(--accent-3);
+  background: var(--bg);
+  color: var(--accent-3);
+  white-space: nowrap;
+}
+
+@keyframes wp-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+[data-flow-static] .providerDot {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .providerDot {
+    animation: none !important;
+  }
+}
