@@ -1,6 +1,6 @@
 # Brickie
 
-Agent sandboxes as [Hatchet](https://hatchet.run) tasks, in your own cloud account.
+Agent sandboxes as [Hatchet](https://hatchet.run?utm_source=brickie-github&utm_medium=referral&utm_campaign=brickie-launch&utm_content=readme) tasks, in your own cloud account.
 
 [![release](https://img.shields.io/github/v/release/hatchet-dev/brickie?display_name=tag&sort=semver)](https://github.com/hatchet-dev/brickie/releases)
 [![license](https://img.shields.io/github/license/hatchet-dev/brickie)](LICENSE)
@@ -72,7 +72,7 @@ The [install docs](https://hatchet-dev.github.io/brickie/install) cover both in 
 - [Architecture](https://hatchet-dev.github.io/brickie/architecture), how turns, snapshots and the store fit together
 - [Security](https://hatchet-dev.github.io/brickie/security), trust boundaries, isolation and image verification
 - [Drivers](https://hatchet-dev.github.io/brickie/drivers) and [extending Brickie](https://hatchet-dev.github.io/brickie/extending) with your own
-- [Hatchet docs](https://docs.hatchet.run), the task engine underneath
+- [Hatchet docs](https://docs.hatchet.run?utm_source=brickie-github&utm_medium=referral&utm_campaign=brickie-launch&utm_content=readme), the task engine underneath
 - [Contributing](https://hatchet-dev.github.io/brickie/contributing) and [AGENTS.md](AGENTS.md), the working rules
 
 ## Contributing

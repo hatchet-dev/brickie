@@ -13,7 +13,7 @@ const GitHubIcon = ({ className }: { className?: string }) => (
 
 const links = [
   { icon: GitHubIcon, text: "GitHub", url: "https://github.com/hatchet-dev/brickie" },
-  { icon: BookOpen, text: "Hatchet docs", url: "https://docs.hatchet.run" },
+  { icon: BookOpen, text: "Hatchet docs", url: "https://docs.hatchet.run?utm_source=brickie-docs&utm_medium=sidebar&utm_campaign=brickie-launch&utm_content=footer" },
   { icon: Package, text: "SDK on npm", url: "https://www.npmjs.com/package/@hatchet-dev/sandbox" },
   { icon: Ship, text: "Helm chart", url: "https://github.com/hatchet-dev/hatchet-charts/tree/main/charts/brickie" },
 ];

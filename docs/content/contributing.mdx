@@ -1,18 +1,18 @@
 ---
 title: Contributing
-description: Get vouched, start small, build and test Brickie.
+description: Get vouched, start small, then build and test Brickie.
 icon: GitPullRequest
 ---
 
-Brickie is Go, with a TypeScript demo and test suite on the published SDK. The repository's [CONTRIBUTING.md](https://github.com/hatchet-dev/brickie/blob/main/CONTRIBUTING.md) is the full guide and [AGENTS.md](https://github.com/hatchet-dev/brickie/blob/main/AGENTS.md) holds the working rules. The short version follows.
+Brickie is written in Go, with a TypeScript demo and test suite that use the published SDK. The full guide is [CONTRIBUTING.md](https://github.com/hatchet-dev/brickie/blob/main/CONTRIBUTING.md) in the repository, and [AGENTS.md](https://github.com/hatchet-dev/brickie/blob/main/AGENTS.md) has the rules we work by. This is the short version.
 
 ## Before your first pull request
 
-Pull requests are only accepted from [vouched](https://github.com/mitchellh/vouch) contributors. Anyone else's pull request is closed automatically. Open a [vouch request discussion](https://github.com/hatchet-dev/brickie/discussions/new?category=vouch-request) that says what you want to change and why, in your own words. A maintainer answers with `!vouch` and a pull request adds you to `.github/VOUCHED.td`.
+We only accept pull requests from people who have been [vouched](https://github.com/mitchellh/vouch). A pull request from anyone else is closed automatically. To get vouched, open a [vouch request discussion](https://github.com/hatchet-dev/brickie/discussions/new?category=vouch-request). Say what you want to change and why, in your own words. A maintainer replies with `!vouch`, and a pull request adds you to `.github/VOUCHED.td`.
 
-Once vouched, start small. One open pull request at a time, scoped to one issue with the `accepted` label. Documentation, chart values, examples and well-scoped bug fixes are the right first changes. Changes to the engine, the drivers, the store layout, the wire contract, the TLS path or the release tooling come after a few of those.
+Once you are vouched, start small. Keep one pull request open at a time, and tie it to one issue that has the `accepted` label. Good first changes are documentation, chart values, examples and small bug fixes. Changes to the engine, the drivers, the store layout, the wire contract, the TLS path or the release tooling come after a few of those.
 
-Every use of AI in a pull request, issue or discussion has to be disclosed. The [AI usage policy](https://github.com/hatchet-dev/brickie/blob/main/AI_POLICY.md) has the rules, and the pull request template has the disclosure block.
+If you used AI for any part of a pull request, issue or discussion, say so. The [AI usage policy](https://github.com/hatchet-dev/brickie/blob/main/AI_POLICY.md) has the rules, and the pull request template has a place to write it down.
 
 ## Build and check
 
@@ -21,7 +21,7 @@ go build ./... && go vet ./...
 pnpm install && pnpm -r typecheck
 ```
 
-Build binaries to `/tmp` or use `go install`. Binaries are never committed.
+Build binaries into `/tmp` or use `go install`. Binaries never get committed.
 
 ## Test
 
@@ -32,25 +32,25 @@ hack/e2e-kind.sh          # both demos on the Kubernetes driver in a kind cluste
 hack/run-demo.sh up && (cd examples/typescript && pnpm test)   # the e2e suite
 ```
 
-CI runs all of these on every pull request. Each first runs `hack/ensure-sandboxd-image.sh`, which builds the pinned sandboxd image locally when its tag is not on GHCR yet. Pull requests never publish images. The demos stay simple and the concept checks live in the e2e suite.
+CI runs all of these on every pull request. Each one starts with `hack/ensure-sandboxd-image.sh`, which builds the pinned sandboxd image locally if its tag is not on GHCR yet. A pull request never publishes an image. The demos stay simple on purpose, and the detailed checks live in the e2e suite.
 
 ## Rules that are easy to miss
 
-- Everything is FIPS 140-3. `brickie` builds with `GOFIPS140=v1.0.0` and `//go:debug fips140=on`, gated by `hack/check-fips.sh`. There is no non-FIPS variant.
+- Everything is FIPS 140-3. `brickie` is built with `GOFIPS140=v1.0.0` and `//go:debug fips140=on`, and `hack/check-fips.sh` fails the build otherwise. There is no non-FIPS variant.
 - A published image tag is never overwritten. A fix ships under the next version.
-- Log through `log/slog` only. `--log-format` picks JSON or text and nothing writes to stderr directly.
-- Task names contain no colons. Hatchet action IDs are `workflow:task`.
-- Snapshot writes are keyed by run ID so retries overwrite their own snapshot. Replay safety depends on it.
-- No host environment variables reach a sandbox.
-- The provider never touches sandbox files itself. Everything goes through sandboxd or runs as a command inside the sandbox.
-- No code comments except where the code cannot express a constraint.
+- Log through `log/slog` only. `--log-format` picks JSON or text, and nothing writes to stderr directly.
+- Task names have no colons. Hatchet action IDs are `workflow:task`.
+- Snapshots are keyed by run ID so a retry overwrites its own snapshot. Replay safety depends on this.
+- No environment variable from the host ever reaches a sandbox.
+- The provider never touches a sandbox's files itself. Everything goes through sandboxd or runs as a command inside the sandbox.
+- No code comments, except where the code cannot express a constraint on its own.
 
 ## Changelog and releases
 
-`CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). A change goes under `Unreleased`. A release turns that into a `## [version] - date` section, which the release workflow reads and refuses to ship without. A released section is never edited.
+`CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). A change goes under `Unreleased`. When we release, that section becomes `## [version] - date`, and the release workflow reads its notes from there and refuses to ship without it. A section that has been released is never edited again.
 
-A release is an annotated tag `v*`. The workflow builds the archives with goreleaser, pushes `ghcr.io/hatchet-dev/brickie`, signs it with cosign and attaches an SBOM. The Helm chart in hatchet-charts then needs its `appVersion` bumped. `sandboxd` and `agent-sandbox-controller` are rebuilt daily from the upstream release by `fips-images.yaml`.
+A release is an annotated `v*` tag. The workflow builds the archives with goreleaser, pushes `ghcr.io/hatchet-dev/brickie`, signs it with cosign and attaches an SBOM. After that, the Helm chart in hatchet-charts needs its `appVersion` bumped. `sandboxd` and `agent-sandbox-controller` are rebuilt from the upstream release every day by `fips-images.yaml`.
 
 ## Security
 
-Report vulnerabilities through the [security policy](https://github.com/hatchet-dev/brickie/blob/main/SECURITY.md), not in a public issue.
+Report a vulnerability through the [security policy](https://github.com/hatchet-dev/brickie/blob/main/SECURITY.md), never in a public issue.

@@ -96,4 +96,4 @@ Scopes are `engine`, `docker`, `kubernetes`, `sandboxd`, `tls`, `store`, `cli`, 
 
 ## Questions
 
-Open an issue, or come find us in the `#contributing` channel on [Discord](https://hatchet.run/discord).
+Open an issue, or come find us in the `#contributing` channel on [Discord](https://hatchet.run/discord?utm_source=brickie-github&utm_medium=referral&utm_campaign=brickie-launch&utm_content=contributing).
