@@ -57,6 +57,9 @@ const session = hatchet.durableTask({
   },
 });
 
+// run the session for a conversation; its ID becomes the sandbox ID
+const { haiku } = await session.run({ conversationId: "conv-42" });
+
 // later, from anywhere with a Hatchet client
 const again = await hatchet.sandbox.connect("conv-42");
 ```
