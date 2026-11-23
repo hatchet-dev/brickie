@@ -17,11 +17,10 @@ The Brickie provider and its components always run in FIPS 140-3 mode.
 
 The basic sandbox lifecycle events are `create`, `exec`, `kill`, and `connect`. Each call is a Hatchet task that Brickie runs against an isolated sandbox. Killing a sandbox removes it and keeps its snapshots, a fork starts from any snapshot with the same files, and connect brings the original back from its latest one.
 
-- [Quickstart](quickstart.md). A sandbox session on your laptop in a few minutes.
+- [Quickstart](quickstart.md). Run a sandbox session on your laptop in a few minutes.
 - [Install](install/README.md). Run the provider on Docker or Kubernetes.
 - [Architecture](architecture.md). Turns, snapshots and the store.
 - [Security](security.md). Trust boundaries, isolation and image verification.
 - [Drivers](drivers.md). Docker for local testing, Kubernetes for production.
 - [Wire contract](wire-contract.md). What the SDK sends and gets back.
 - [Extending](extending.md). Write your own driver.
-- [Contributing](contributing.md). How to build, test and send changes.

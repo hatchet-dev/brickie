@@ -16,7 +16,7 @@ On S3 a one-day lifecycle rule on the `staging/` prefix is a good shorter bound.
 
 ## Pick a driver
 
-Docker is for local testing only. Every production workload runs on Kubernetes, where each sandbox gets a VM or user-space kernel boundary, mutual TLS to the provider, a `NetworkPolicy` and resource limits.
+Docker is for local testing only. Production workloads should run via the Kubernetes driver, where each sandbox gets a VM or user-space kernel boundary, mutual TLS to the provider, a `NetworkPolicy` and resource limits.
 
 - [**Docker**](docker.md). The provider is a binary on a machine with Docker. Each sandbox is a container on that engine, reached in plaintext over loopback, with the container runtime as the only boundary. For trying Brickie out and for local development.
 - [**Kubernetes**](kubernetes.md). The provider is a pod deployed by the Helm chart. Each sandbox is its own pod from a warm pool, under Kata Containers, gVisor, EKS Nitro or any RuntimeClass, reached over mutual TLS and fenced by a NetworkPolicy. For every production workload.

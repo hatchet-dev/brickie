@@ -1,10 +1,38 @@
 # Architecture
 
-Turns, snapshots, the store and how the pieces talk to each other.
+This page documents how all the different components of `brickie` fit together. It may be helpful to familiarize yourself with the concept of a [Hatchet task](https://docs.hatchet.run/v1/tasks) before reading this doc. Every SDK call (`exec`, `create`, `kill`, etc.) is a Hatchet task.
 
-Brickie has no control plane of its own. Hatchet is the queue, the retry logic, the event log and the dashboard. The Brickie provider itself is a Hatchet gRPC operator that serves one task, namely `brickie-sandbox`. Every SDK call becomes one run of that task, which we refer to as a turn.
+## High-level architecture
 
-Here is what happens when your task calls `exec('make test')`.
+Hatchet runs outside your cluster. The sandbox provider runs inside of the cluster and connects to Hatchet directly, so it doesn't need ingress or inbound rules.
+
+```mermaid
+flowchart LR
+    App["Your application<br/>@hatchet-dev/sandbox"]
+    Hatchet["Hatchet engine<br/>Cloud or self-hosted"]
+    Store[("Object store<br/>snapshots, metadata, large files")]
+
+    subgraph Cluster["Your Kubernetes cluster"]
+        Provider["brickie provider"]
+        Controller["agent-sandbox controller"]
+        Pool["Warm pool"]
+        subgraph Pod["Sandbox pod"]
+            TLS["sandbox-tls"]
+            Sandboxd["sandboxd<br/>/workspace"]
+        end
+    end
+
+    App -- "brickie-sandbox task" --> Hatchet
+    Provider -- "picks up turns" --> Hatchet
+    Provider -- "SandboxClaim" --> Controller
+    Controller -- "binds a pod" --> Pool
+    Pool -.-> Pod
+    Provider -- "mTLS, commands and files" --> TLS
+    TLS --> Sandboxd
+    Provider -- "tar in, tar out" --> Store
+```
+
+When your task calls `exec('make test')`, here's what happens under the hood:
 
 1. The SDK starts a `brickie-sandbox` run in your tenant. Hatchet queues it like any other task, so it shows up in the dashboard and gets retried if something goes wrong.
 2. The provider picks the run up. It finds the sandbox, or starts one from the latest snapshot if the old one is gone.
@@ -16,43 +44,39 @@ If the provider dies halfway, Hatchet retries the run with the same ID. This mea
 
 ## Components
 
-| Component | Runs where | Does |
-| --- | --- | --- |
-| SDK (`@hatchet-dev/sandbox`) | your application | Turns `sandbox.exec` and friends into `brickie-sandbox` task runs. Never talks to the provider or a sandbox. |
-| Hatchet | Hatchet Cloud or self-hosted | Queues, retries, records and shows every turn. |
-| Provider (`brickie worker`) | your cluster or machine | Picks up turns, drives sandboxes, writes snapshots. One per tenant. |
-| Driver | inside the provider | Starts and finds sandboxes on Docker or Kubernetes. |
-| sandboxd | PID 1 in every sandbox | The [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) daemon. Commands over gRPC, files over REST. |
-| Store | a bucket | Snapshots, sandbox metadata, turn results and staged large files. |
+| Component                    | Runs where                   | Does                                                                                                               |
+| ---------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| SDK (`@hatchet-dev/sandbox`) | your application             | Turns `sandbox.exec` and friends into `brickie-sandbox` task runs. Never talks to the provider or a sandbox.       |
+| Hatchet                      | Hatchet Cloud or self-hosted | Queues, retries, records and shows every turn.                                                                     |
+| Provider (`brickie worker`)  | your cluster or machine      | Picks up turns, drives sandboxes, writes snapshots. One per tenant.                                                |
+| Driver                       | inside the provider          | Starts and finds sandboxes on Docker or Kubernetes.                                                                |
+| sandboxd                     | PID 1 in every sandbox       | The [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) daemon. Commands over gRPC, files over REST. |
+| Store                        | a bucket                     | Snapshots, sandbox metadata, turn results and staged large files.                                                  |
 
 ## Turns
 
-Every call the SDK makes is one turn, a simple Hatchet task underneath. The task input says which sandbox, which function and what the function needs. The functions are `$create`, `$connect`, `$list`, `$delete`, `$command` and the `$fs.*` file functions.
+Every call the SDK makes is one turn which runs as a Hatchet task. The provider serves every turn, but not every turn reaches a sandbox. `$list` and `$fs.presign` are answered from the object store. `$delete` stops the sandbox and then removes everything the store holds for it. `$create`, `$connect`, `$destroy`, `$command` and the other `$fs.*` functions go to the driver, which finds the sandbox or starts one and talks to `sandboxd` inside it.
 
-Three of them never reach a sandbox - `$list`, `$delete` and `$fs.presign` are answered from the store. The rest go to the driver, which finds the sandbox or starts one and talks to `sandboxd` inside it.
-
-One sandbox runs one turn at a time. The provider queues the rest. A `$command` turn always returns `stdout`, `stderr` and `exitCode`. A non-zero exit code does not fail the task, it is a normal answer, and your task decides what to do with it.
+Each sandbox runs one turn at a time while the rest are queued by the provider. A `$command` turn always returns `stdout`, `stderr` and `exitCode`. A non-zero exit code does not fail the task, it is a normal answer, and your task decides what to do with it.
 
 Every turn comes back with timings for `claim`, `restore`, `exec` and `checkpoint`, so you can see where the time went.
 
 ## Snapshots
 
-The sandbox's files live in `/workspace`. After every turn that could have changed them, the provider runs `tar` inside the sandbox and streams the archive to the store. That archive is a snapshot. Its id is `<sandboxId>/<runId>`.
+The sandbox's files live in `/workspace`. After every file-modifying turn, the provider runs `tar` inside the sandbox and streams the archive to the store. That archive is a snapshot with the ID `<sandboxId>/<runId>`, stored under `snapshots/`. Snapshots are immutable. Each sandbox has a `latest` pointer corresponding to its newest snapshot.
 
-A snapshot never changes once it is written. Each sandbox has a `latest` pointer that names its newest snapshot. The pointer moves forward only. It is updated after the snapshot and the turn's result are safely in the store, never before.
+The run ID in the snapshot ID is the one Hatchet gave the task run, and Hatchet reuses it when it retries. A retried turn finds the result it already stored and returns it without running the command a second time. That is why a sandbox call is safe inside a durable task.
 
-This is what the SDK calls do with snapshots:
+The SDK calls operate on snapshots in the following cases:
 
 - `connect(id)` brings a sandbox back. If it is still running, nothing happens. If it is gone, a new one starts from the latest snapshot.
 - `create({ from })` starts a new sandbox from any snapshot in the form of a fork. The original keeps going on its own.
 - `kill()` stops the sandbox and keeps its snapshots.
 - `delete` removes the sandbox and all its snapshots.
 
-Snapshot IDs contain the run ID, and Hatchet reuses the run ID when it retries. So a retried turn finds the result it already stored and returns it, without running the command a second time. That is why a sandbox call is safe inside a durable task.
-
 ## Files
 
-A file up to `--max-file-bytes`, 2 MiB by default, travels inside the task itself. A bigger file never goes through Hatchet. Instead the provider hands the SDK a presigned URL for one object in the store, the SDK uploads or downloads straight to that URL, and the provider copies the bytes between the store and the sandbox. A URL works for 15 minutes and for one sandbox only.
+A file up to `--max-file-bytes`, 2 MiB by default, travels inside the task itself. A larger file never goes through Hatchet. For a write, the SDK asks the provider for a presigned URL to one object in the store, uploads the bytes to that URL, and then the provider streams the staged object into the sandbox. A read works in reverse: the provider copies the file from the sandbox to the store and the SDK downloads it from a presigned URL. A URL is valid for 15 minutes and for one sandbox only.
 
 The provider never opens a sandbox's files itself. Reads, writes and listings go through `sandboxd`'s file API. `mkdir`, `rename`, `copy` and `remove` run as commands inside the sandbox, after a check that the path stays inside `/workspace`. Because of this, the Docker and Kubernetes drivers share the same code for everything that happens inside a sandbox.
 
