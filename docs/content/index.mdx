@@ -14,15 +14,11 @@ Brickie runs sandboxes as [Hatchet](https://hatchet.run?utm_source=brickie-docs&
 
 The provider runs locally on your laptop with Docker for local testing or in your own Kubernetes cluster for production workloads. It makes an egress connection to a running Hatchet instance using the same mechanism a Hatchet worker would with a tenant API token.
 
-The Brickie provider and its components run in FIPS 140-3 mode.
+The Brickie provider and its components alays run in FIPS 140-3 mode.
 
 <SandboxSession />
 
-A task calls `create`, `exec`, `kill`, and `connect`. Each call is a Hatchet task that Brickie runs against an isolated sandbox pod in your Kubernetes cluster. Killing a sandbox stores a snapshot, a fork starts from it with the same files, and connect brings the original back from the same snapshot.
-
-## Who it is for
-
-You already run tasks on [Hatchet Cloud](https://cloud.hatchet.run?utm_source=brickie-docs&utm_medium=referral&utm_campaign=brickie-launch&utm_content=index) or a self-hosted Hatchet, and your agents need a place to run commands and edit files. You want that place inside your own account, under your own network policy and compliance rules, with snapshots in your own bucket. Brickie gives you that without a second control plane. Hatchet is the queue, the retry logic and the dashboard, Brickie is the thing that starts and talks to sandboxes.
+The basic sandbox lifecycle events are `create`, `exec`, `kill`, and `connect`. Each call is a Hatchet task that Brickie runs against an isolated sandbox pod in your Kubernetes cluster. Killing a sandbox stores a snapshot, a fork starts from it with the same files, and connect brings the original back from the same snapshot.
 
 <Cards>
   <Card href="/quickstart" title="Quickstart" description="A sandbox session on your laptop in a few minutes." />
