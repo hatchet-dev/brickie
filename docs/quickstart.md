@@ -1,26 +1,17 @@
----
-title: Quickstart
-description: Hatchet Lite and a sandbox provider on your laptop, then a first sandbox session.
-icon: Rocket
----
+# Quickstart
 
-import { LatestTags } from "@/components/latest-tags";
-
-<LatestTags />
+Hatchet Lite and a sandbox provider on your laptop, then a first sandbox session.
 
 This quickstart spawns a local Hatchet instance with Docker Compose as well as the Brickie provider. You need a running Docker daemon, Node 24 and [pnpm](https://pnpm.io/installation).
 
-<Callout type="info">
-  Already on Hatchet Cloud or a self-hosted Hatchet v0.110.0 or newer with gRPC operators enabled (`SERVER_GRPC_OPERATORS_ENABLED=true`)? Skip the first two steps and use a client token from your tenant.
-</Callout>
+> [!NOTE]
+> Already on Hatchet Cloud or a self-hosted Hatchet v0.110.0 or newer with gRPC operators enabled (`SERVER_GRPC_OPERATORS_ENABLED=true`)? Skip the first two steps and use a client token from your tenant.
 
-<Steps>
-<Step>
 ### Start Hatchet
 
 Save this as `docker-compose.yml` in an empty directory. It starts [Hatchet Lite](https://docs.hatchet.run/self-hosting/hatchet-lite?utm_source=brickie-docs&utm_medium=referral&utm_campaign=brickie-launch&utm_content=quickstart) with Postgres and gRPC operators turned on.
 
-```yaml title="docker-compose.yml"
+```yaml
 name: brickie
 services:
   postgres:
@@ -40,7 +31,7 @@ services:
       retries: 5
       start_period: 10s
   hatchet:
-    image: ghcr.io/hatchet-dev/hatchet/hatchet-lite:latest
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-lite:v0.110.5
     ports:
       - "127.0.0.1:8888:8888"
       - "127.0.0.1:7077:7077"
@@ -78,9 +69,7 @@ docker compose up -d --wait
 ```
 
 The Hatchet dashboard is at [http://localhost:8888](http://localhost:8888). Log in with `admin@example.com` and `Admin123!!`.
-</Step>
 
-<Step>
 ### Create a token
 
 Both the provider and your code authenticate to Hatchet with a client token. Hatchet Lite seeds one tenant, so this creates a token for it and puts it in your shell.
@@ -92,12 +81,10 @@ export HATCHET_CLIENT_TLS_STRATEGY=none
 ```
 
 The second line is for local Hatchet only which serves gRPC without TLS. Leave it out against Hatchet Cloud.
-</Step>
 
-<Step>
 ### Start the Brickie provider
 
-Download the archive for your platform from the [releases page](https://github.com/hatchet-dev/brickie/releases/latest), for example `brickie_X.Y.Z_Darwin_arm64.tar.gz` or `brickie_X.Y.Z_Linux_x86_64.tar.gz`, and start it in the same shell.
+Download the archive for your platform from the [releases page](https://github.com/hatchet-dev/brickie/releases/latest), for example `brickie_0.1.7_Darwin_arm64.tar.gz` or `brickie_0.1.7_Linux_x86_64.tar.gz`, and start it in the same shell.
 
 ```bash
 tar -xzf brickie_*.tar.gz
@@ -107,9 +94,7 @@ tar -xzf brickie_*.tar.gz
 It pulls `ghcr.io/hatchet-dev/sandboxd` once, connects to Hatchet and logs `connected as grpc operator`. 
 
 Sandboxes are containers on your Docker engine. Snapshots go to `~/.brickie/store`. Leave it running and open a second shell with the same two exports for the next step.
-</Step>
 
-<Step>
 ### Run a sandbox session
 
 Your code needs a client token for the same tenant the provider is connected to. The SDK triggers the `brickie-sandbox` task in the tenant of its token, and only the provider connected to that tenant serves it. A token for another tenant, or a shell without the two exports from step 2, gives a run that waits forever for a worker.
@@ -125,7 +110,7 @@ Save this as `agent-session.mts`. It is one durable task. Every sandbox call ins
 
 `template` is the container image the sandbox runs. Any image with `sh` and `tar` works, from `alpine:3` to your own custom image. The provider's default is `alpine:3` which can be overridden using the `--image` argument.
 
-```ts title="agent-session.mts"
+```ts
 import { HatchetClient } from '@hatchet-dev/typescript-sdk/v1';
 import '@hatchet-dev/sandbox';
 
@@ -163,9 +148,7 @@ pnpm dlx tsx agent-session.mts
 
 The run shows up in the dashboard under `agent-session`, with one `brickie-sandbox` child run per call. The sandbox is killed at the end but its snapshot stays, so `hatchet.sandbox.connect('conv-42')` from any code with the same token brings it back with `haiku.txt` in place.
 
-The full walkthrough, with list, fork from a snapshot, reconnect and delete, is [`examples/typescript/demo.ts`](https://github.com/hatchet-dev/brickie/blob/main/examples/typescript/demo.ts) in the repository.
-</Step>
-</Steps>
+The full walkthrough, with list, fork from a snapshot, reconnect and delete, is [`examples/typescript/demo.ts`](../examples/typescript/demo.ts) in the repository.
 
 ## Stop it
 
@@ -178,4 +161,4 @@ Stop the provider with Ctrl-C.
 
 ## Next
 
-Sandboxes on the local Docker engine are plain containers. That is for local testing only. For production, [install the provider on Kubernetes](/install/kubernetes), where every sandbox is its own pod under Kata Containers, gVisor or EKS Nitro.
+Sandboxes on the local Docker engine are plain containers. That is for local testing only. For production, [install the provider on Kubernetes](install/kubernetes.md), where every sandbox is its own pod under Kata Containers, gVisor or EKS Nitro.

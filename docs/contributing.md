@@ -1,10 +1,8 @@
----
-title: Contributing
-description: Get vouched, start small, then build and test Brickie.
-icon: GitPullRequest
----
+# Contributing
 
-Brickie is written in Go, with a TypeScript demo and test suite that use the published SDK. The full guide is [CONTRIBUTING.md](https://github.com/hatchet-dev/brickie/blob/main/CONTRIBUTING.md) in the repository, and [AGENTS.md](https://github.com/hatchet-dev/brickie/blob/main/AGENTS.md) has the rules we work by. This is the short version.
+Get vouched, start small, then build and test Brickie.
+
+Brickie is written in Go, with a TypeScript demo and test suite that use the published SDK. The full guide is [CONTRIBUTING.md](../CONTRIBUTING.md) in the repository, and [AGENTS.md](../AGENTS.md) has the rules we work by. This is the short version.
 
 ## Before your first pull request
 
@@ -12,7 +10,7 @@ We only accept pull requests from people who have been [vouched](https://github.
 
 Once you are vouched, start small. Keep one pull request open at a time, and tie it to one issue that has the `accepted` label. Good first changes are documentation, chart values, examples and small bug fixes. Changes to the engine, the drivers, the store layout, the wire contract, the TLS path or the release tooling come after a few of those.
 
-If you used AI for any part of a pull request, issue or discussion, say so. The [AI usage policy](https://github.com/hatchet-dev/brickie/blob/main/AI_POLICY.md) has the rules, and the pull request template has a place to write it down.
+If you used AI for any part of a pull request, issue or discussion, say so. The [AI usage policy](../AI_POLICY.md) has the rules, and the pull request template has a place to write it down.
 
 ## Build and check
 
@@ -53,4 +51,4 @@ A release is an annotated `v*` tag. The workflow builds the archives with gorele
 
 ## Security
 
-Report a vulnerability through the [security policy](https://github.com/hatchet-dev/brickie/blob/main/SECURITY.md), never in a public issue.
+Report a vulnerability through the [security policy](../SECURITY.md), never in a public issue.

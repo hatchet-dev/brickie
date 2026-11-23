@@ -1,14 +1,8 @@
----
-title: Architecture
-description: Turns, snapshots, the store and how the pieces talk to each other.
-icon: Blocks
----
+# Architecture
 
-import { TurnLifecycle } from "@/components/flow-animations/TurnLifecycle";
+Turns, snapshots, the store and how the pieces talk to each other.
 
 Brickie has no control plane of its own. Hatchet is the queue, the retry logic, the event log and the dashboard. The Brickie provider itself is a Hatchet gRPC operator that serves one task, namely `brickie-sandbox`. Every SDK call becomes one run of that task, which we refer to as a turn.
-
-<TurnLifecycle />
 
 Here is what happens when your task calls `exec('make test')`.
 

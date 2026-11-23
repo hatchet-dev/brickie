@@ -1,8 +1,6 @@
----
-title: Wire contract
-description: What the SDK sends to the provider and what it gets back, field by field.
-icon: Cable
----
+# Wire contract
+
+What the SDK sends to the provider and what it gets back, field by field.
 
 An SDK and the Brickie provider never talk to each other directly. Everything goes through one Hatchet task called `brickie-sandbox`. The SDK starts a run of that task with a JSON input, and the provider answers with a JSON output.
 
@@ -43,7 +41,7 @@ The expected task input shape is the following JSON body.
 | `metadata` | map of strings | `$create` | Tags saved with the sandbox. `$list` and `$delete` match on them. |
 | `idleTtlMs` | integer | `$create` | How long the sandbox may sit idle before it is removed. Above `--max-sandbox-idle-ttl` the create fails. |
 | `inheritMetadata` | boolean | `$create` | Together with `snapshotId`, copy the metadata of the sandbox that made the snapshot. Keys in `metadata` win. |
-{/* | `resources` | object | none | `vcpu`, `memoryMib`, `diskMib`. Brickie ignores this today. Limits come from the provider's flags. | */}
+<!-- | `resources` | object | none | `vcpu`, `memoryMib`, `diskMib`. Brickie ignores this today. Limits come from the provider's flags. | -->
 
 The SDK also tags every run with Hatchet run metadata, namely:
 - `hatchet.sandbox.fn`
@@ -85,7 +83,9 @@ Starts a sandbox. `input` is `{}`.
 
 It fails when `sandboxId` is given and a sandbox with that ID already exists, or when the snapshot named in `snapshotId` cannot be read. When `snapshotId` is given, the new sandbox's `latest` pointer is set to that snapshot right away, so the sandbox can be connected again even before its first change.
 
-```json title="output"
+output
+
+```json
 { "created": true }
 ```
 
@@ -95,11 +95,13 @@ Picks up an existing sandbox by `sandboxId`. `input` is `{}`.
 
 If the sandbox is still running, nothing is restored and `created` is `false`. If it is gone, the provider starts a new one from the sandbox's latest snapshot and `created` is `true`. If the provider has never heard of the ID, the turn fails with `unknown sandbox`. It never answers with an empty workspace.
 
-```json title="output"
+output
+
+```json
 { "created": false }
 ```
 
-{/* Brickie's `$create` and `$connect` outputs do not carry `metadata` or `provider` yet, so the SDK's `Sandbox.metadata` is empty when the provider is Brickie. Adding them is an addition and is planned. */}
+<!-- Brickie's `$create` and `$connect` outputs do not carry `metadata` or `provider` yet, so the SDK's `Sandbox.metadata` is empty when the provider is Brickie. Adding them is an addition and is planned. -->
 
 ### `$command`
 
@@ -107,11 +109,15 @@ Runs `sh -c <cmd>` in `/workspace`.
 
 A non-zero exit code is a normal result. When the command hits `timeoutMs`, `exitCode` is 124. Each of `stdout` and `stderr` is kept up to 1 MiB. Past that the stream is cut and ends with `truncated at 1048576 bytes`.
 
-```json title="input"
+input
+
+```json
 { "cmd": "make test", "timeoutMs": 600000 }
 ```
 
-```json title="output"
+output
+
+```json
 { "stdout": "…", "stderr": "…", "exitCode": 0 }
 ```
 
@@ -129,11 +135,15 @@ In the SDK, `hatchet.sandbox.delete({ metadata })` runs one `$list` and then one
 
 The only function without a `sandboxId`. The provider answers it from the store and never touches a sandbox.
 
-```json title="input"
+input
+
+```json
 { "sandboxId": "conv-42", "metadata": { "team": "search" } }
 ```
 
-```json title="output"
+output
+
+```json
 {
   "sandboxes": [
     {
@@ -156,7 +166,9 @@ These are the file functions. Paths are relative to `/workspace` and cannot leav
 
 Each function has one input shape and one output shape. When the caller made a mistake, for example asked for a file that does not exist, the turn still succeeds and the output carries an `error` field instead.
 
-```json title="output with an error"
+output with an error
+
+```json
 { "error": { "code": "not_found", "message": "stat \"notes/x.md\": no such file" } }
 ```
 
@@ -198,6 +210,5 @@ A snapshot ID is `<sandboxId>/<runId>`, where the run ID is the ID Hatchet gave 
 
 That order is what makes a turn safe to retry. Hatchet keeps the run ID across retries, so a retried turn finds its own stored result and returns it without running the command again. If another turn published a newer snapshot in between, the retried turn's snapshot stays where it is and the pointer does not move backwards. If the provider cannot read the store to check, the retry fails rather than running the command a second time.
 
-<Callout type="warn">
-  `$create` with `snapshotId` can read any snapshot the provider can open, including one from another sandbox. The fork's own turns then write under the fork's own prefix. If the parent is deleted before the fork has taken its first snapshot, the fork has nothing left to connect to.
-</Callout>
+> [!WARNING]
+> `$create` with `snapshotId` can read any snapshot the provider can open, including one from another sandbox. The fork's own turns then write under the fork's own prefix. If the parent is deleted before the fork has taken its first snapshot, the fork has nothing left to connect to.

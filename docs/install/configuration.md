@@ -1,7 +1,6 @@
----
-title: Configuration
-description: Every flag of brickie worker and its environment variable.
----
+# Configuration
+
+Every flag of brickie worker and its environment variable.
 
 `brickie worker --help` prints the same list. Every flag has a `BRICKIE_*` environment variable, which the Helm chart sets for you. `HATCHET_CLIENT_TOKEN` is required and has no flag.
 

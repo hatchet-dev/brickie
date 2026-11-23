@@ -7,8 +7,8 @@ Sandboxes as [Hatchet](https://hatchet.run?utm_source=brickie-github&utm_medium=
 [![go](https://img.shields.io/github/go-mod/go-version/hatchet-dev/brickie)](go.mod)
 [![e2e-docker](https://github.com/hatchet-dev/brickie/actions/workflows/e2e-docker.yaml/badge.svg?branch=main)](https://github.com/hatchet-dev/brickie/actions/workflows/e2e-docker.yaml)
 [![e2e-kind](https://github.com/hatchet-dev/brickie/actions/workflows/e2e-kind.yaml/badge.svg?branch=main)](https://github.com/hatchet-dev/brickie/actions/workflows/e2e-kind.yaml)
-[![FIPS 140-3](https://img.shields.io/badge/FIPS%20140--3-Go%20Cryptographic%20Module-2b6cb0)](https://hatchet-dev.github.io/brickie/security#files-and-snapshots)
-[![signed images](https://img.shields.io/badge/images-cosign%20signed%20%2B%20SBOM-2b6cb0)](https://hatchet-dev.github.io/brickie/security#verifying-images)
+[![FIPS 140-3](https://img.shields.io/badge/FIPS%20140--3-Go%20Cryptographic%20Module-2b6cb0)](docs/security.md)
+[![signed images](https://img.shields.io/badge/images-cosign%20signed%20%2B%20SBOM-2b6cb0)](docs/security.md#verifying-images)
 
 A sandbox is a container with a shell and a workspace. Every call on it is one Hatchet task, so it is durable, retried and visible in the dashboard. Every call that changes the workspace makes a snapshot. A snapshot never changes, any snapshot can start a new sandbox, and a sandbox can be picked up again later by its ID.
 
@@ -16,11 +16,11 @@ The provider runs on your laptop with Docker or in your Kubernetes cluster, conn
 
 > Brickie is in beta. Flags, chart values and the wire contract may change before 1.0. See the [changelog](CHANGELOG.md).
 
-**Docs: [hatchet-dev.github.io/brickie](https://hatchet-dev.github.io/brickie)**
+**Docs: [docs/](docs/README.md)**
 
 ## Try it
 
-The [quickstart](https://hatchet-dev.github.io/brickie/quickstart) runs a local Hatchet with one Docker Compose file, the provider as a binary, and a first sandbox session from a single TypeScript file. No clone needed. From a checkout, `hack/run-demo.sh` does the same in one go.
+The [quickstart](docs/quickstart.md) runs a local Hatchet with one Docker Compose file, the provider as a binary, and a first sandbox session from a single TypeScript file. No clone needed. From a checkout, `hack/run-demo.sh` does the same in one go.
 
 ## Use it from a task
 
@@ -65,15 +65,16 @@ helm install brickie hatchet/brickie -n brickie --create-namespace \
   --set store='s3://my-bucket?prefix=brickie/'
 ```
 
-The [install docs](https://hatchet-dev.github.io/brickie/install) cover both in detail, and [configuration](https://hatchet-dev.github.io/brickie/install/configuration) lists every flag.
+The [install docs](docs/install/README.md) cover both in detail, and [configuration](docs/install/configuration.md) lists every flag.
 
 ## Learn more
 
-- [Architecture](https://hatchet-dev.github.io/brickie/architecture), how turns, snapshots and the store fit together
-- [Security](https://hatchet-dev.github.io/brickie/security), trust boundaries, isolation and image verification
-- [Drivers](https://hatchet-dev.github.io/brickie/drivers) and [extending Brickie](https://hatchet-dev.github.io/brickie/extending) with your own
+- [Architecture](docs/architecture.md), how turns, snapshots and the store fit together
+- [Security](docs/security.md), trust boundaries, isolation and image verification
+- [Drivers](docs/drivers.md) and [extending Brickie](docs/extending.md) with your own
+- [Wire contract](docs/wire-contract.md), what the SDK sends and gets back
 - [Hatchet docs](https://docs.hatchet.run?utm_source=brickie-github&utm_medium=referral&utm_campaign=brickie-launch&utm_content=readme), the task engine underneath
-- [Contributing](https://hatchet-dev.github.io/brickie/contributing) and [AGENTS.md](AGENTS.md), the working rules
+- [Contributing](docs/contributing.md) and [AGENTS.md](AGENTS.md), the working rules
 
 ## Contributing
 

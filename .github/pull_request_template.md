@@ -22,7 +22,7 @@ Fixes # (issue)
 
 Changes have been:
 
-- [ ] Documented in `docs/content` where applicable
+- [ ] Documented in `docs/` where applicable
 - [ ] Added under `Unreleased` in `CHANGELOG.md` where applicable
 - [ ] Run through `hack/run-demo.sh` or `hack/e2e-kind.sh` where applicable
 

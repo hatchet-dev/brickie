@@ -55,7 +55,7 @@ Each command opens a pull request against `main` with the change to `.github/VOU
 
 ## Getting Started
 
-New to Brickie? Start with the [architecture](https://hatchet-dev.github.io/brickie/architecture) and [security](https://hatchet-dev.github.io/brickie/security) pages, then [AGENTS.md](./AGENTS.md), which holds the working rules for the repository.
+New to Brickie? Start with the [architecture](docs/architecture.md) and [security](docs/security.md) pages, then [AGENTS.md](./AGENTS.md), which holds the working rules for the repository.
 
 ## Development Environment Setup
 
@@ -82,7 +82,7 @@ hack/run-demo.sh          # the Docker driver, end to end
 hack/e2e-kind.sh          # the Kubernetes driver on a kind cluster, when a driver changed
 ```
 
-A user-facing change gets a line under `Unreleased` in [`CHANGELOG.md`](./CHANGELOG.md) and, where it changes behaviour, a docs update under `docs/content`. Never edit a released changelog section.
+A user-facing change gets a line under `Unreleased` in [`CHANGELOG.md`](./CHANGELOG.md) and, where it changes behaviour, a docs update under `docs/`. Never edit a released changelog section.
 
 ### Titles
 

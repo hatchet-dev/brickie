@@ -16,4 +16,4 @@ There is no bug bounty program. Reports are read and answered all the same.
 
 The provider, its images, the Helm chart and the `brickie-sandbox` wire contract. The `@hatchet-dev/sandbox` SDK lives in [hatchet-dev/hatchet](https://github.com/hatchet-dev/hatchet/security) and follows its policy.
 
-The trust boundaries and the controls that hold them are described in the [security model](https://hatchet-dev.github.io/brickie/security), together with how to verify image signatures and SBOMs.
+The trust boundaries and the controls that hold them are described in the [security model](docs/security.md), together with how to verify image signatures and SBOMs.

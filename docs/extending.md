@@ -1,8 +1,6 @@
----
-title: Extending
-description: Write a driver for another sandbox backend.
-icon: Puzzle
----
+# Extending
+
+Write a driver for another sandbox backend.
 
 A driver is the one part of Brickie that knows how to start a sandbox and how to reach it. Everything else is shared.
 
@@ -35,7 +33,7 @@ Before a turn ever reaches your driver, the engine has done a lot of the work. I
 
 If your backend can run [`sandboxd`](https://github.com/kubernetes-sigs/agent-sandbox/blob/main/packages/sandboxd/USER_GUIDE.md) as the process inside the sandbox, that is the whole job. Look at `internal/driver/docker` for the smallest working example and at `internal/driver/kubernetes` for the full one with warm pools, mutual TLS and runtime classes.
 
-If your backend cannot run `sandboxd`, you need your own way to run commands and move files, and it has to keep the same promises. Read the [security page](/security) first. Every byte that comes out of a sandbox is hostile, every path is checked twice, and the provider never follows a redirect from a sandbox.
+If your backend cannot run `sandboxd`, you need your own way to run commands and move files, and it has to keep the same promises. Read the [security page](security.md) first. Every byte that comes out of a sandbox is hostile, every path is checked twice, and the provider never follows a redirect from a sandbox.
 
 ## Wire it in
 
@@ -43,7 +41,7 @@ Drivers are picked by a `switch` on `--driver` in `cmd/brickie/worker.go`. Add a
 
 ## Keep the contract
 
-The SDK stays thin. It starts the `brickie-sandbox` task by name and never knows which provider or driver is behind it. A new driver must not change the [wire contract](/wire-contract).
+The SDK stays thin. It starts the `brickie-sandbox` task by name and never knows which provider or driver is behind it. A new driver must not change the [wire contract](wire-contract.md).
 
 ## Testing
 

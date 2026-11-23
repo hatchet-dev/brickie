@@ -1,10 +1,6 @@
----
-title: Drivers
-description: What the Docker and Kubernetes drivers do and when to use which.
-icon: Container
----
+# Drivers
 
-import { WarmPool } from "@/components/flow-animations/WarmPool";
+What the Docker and Kubernetes drivers do and when to use which.
 
 A driver does one job. It finds the sandbox a turn is for, or starts a new one, and hands the provider a connection to the `sandboxd` process inside it. Everything that happens after that - such as restoring the snapshot, running the command, moving files, taking the next snapshot - is the same code for every driver.
 
@@ -25,8 +21,6 @@ In the Kubernetes driver, every sandbox is a pod. The [agent-sandbox](https://gi
 Each pod has two containers from Brickie:
 - The sandbox container, with `sandboxd` copied in by an init container
 - A small TLS proxy, which is the provider's own image running `brickie sandbox-tls`.
-
-<WarmPool />
 
 A create takes a ready pod from the pool, and the pool starts a replacement in the background. Every call on that pod goes over mutual TLS. When the idle TTL passes, the pod is removed and the snapshots stay in the store.
 
@@ -63,9 +57,8 @@ On top of that, a `NetworkPolicy` allows traffic to those two ports only from po
 ]
 ```
 
-<Callout type="info" title="Naming">
-  The names `sandboxd`, `sandbox` and `tls` are reserved for Brickie's own containers.
-</Callout>
+> [!NOTE]
+> **Naming.** The names `sandboxd`, `sandbox` and `tls` are reserved for Brickie's own containers.
 
 If an init container fails, the pod never becomes ready. The claim reports `DependenciesNotReady` with the container's name, and after the claim timeout the turn fails with that message, so you see it in the Hatchet dashboard.
 
@@ -79,4 +72,4 @@ If an init container fails, the pod never becomes ready. The claim reports `Depe
 
 ### Permissions
 
-The provider needs no access to pods. It reads and writes the agent-sandbox resources in the sandbox namespace, and Secrets in its own namespace and the sandbox namespace. The [security page](/security#kubernetes-permissions) lists every verb.
+The provider needs no access to pods. It reads and writes the agent-sandbox resources in the sandbox namespace, and Secrets in its own namespace and the sandbox namespace. The [security page](security.md#kubernetes-permissions) lists every verb.

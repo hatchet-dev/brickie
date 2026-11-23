@@ -1,17 +1,11 @@
----
-title: Docker
-description: Run the provider on a machine with Docker.
----
+# Docker
 
-import { LatestTags } from "@/components/latest-tags";
+Run the provider on a machine with Docker.
 
-<LatestTags />
+> [!WARNING]
+> **Local testing only.** Sandboxes are plain containers on the local Docker engine. The provider talks to each over a loopback port published on `127.0.0.1` only. There is no VM boundary, no NetworkPolicy and no resource limit. Use the [Kubernetes driver](kubernetes.md) for production.
 
-<Callout type="warn" title="Local testing only">
-  Sandboxes are plain containers on the local Docker engine. The provider talks to each over a loopback port published on `127.0.0.1` only. There is no VM boundary, no NetworkPolicy and no resource limit. Use the [Kubernetes driver](/install/kubernetes) for production.
-</Callout>
-
-Download the archive for your platform from the [releases page](https://github.com/hatchet-dev/brickie/releases/latest), unpack it and start the provider with the tenant token. The current release is vX.Y.Z. Archives exist for Linux and macOS on amd64 and arm64. The [quickstart](/quickstart) walks through this with a local Hatchet Lite deployment.
+Download the archive for your platform from the [releases page](https://github.com/hatchet-dev/brickie/releases/latest), unpack it and start the provider with the tenant token. The current release is v0.1.7. Archives exist for Linux and macOS on amd64 and arm64. The [quickstart](../quickstart.md) walks through this with a local Hatchet Lite deployment.
 
 ```bash
 tar -xzf brickie_*_Linux_x86_64.tar.gz
@@ -29,7 +23,7 @@ Without `--store` snapshots go to `~/.brickie/store`. Files larger than `--max-f
 
 ## Run it as a service
 
-The provider is stateless apart from the store. You can run it under `systemd` or anything else that restarts it. `brickie version` prints the version, commit and whether FIPS mode is on. All flags are listed on the [configuration page](/install/configuration).
+The provider is stateless apart from the store. You can run it under `systemd` or anything else that restarts it. `brickie version` prints the version, commit and whether FIPS mode is on. All flags are listed on the [configuration page](configuration.md).
 
 A `systemd` unit needs three things. A user that can reach the Docker socket, a file with the token that only that user can read, and writable directories for the store and the cached `sandboxd` binary.
 
@@ -41,7 +35,8 @@ sudo sh -c 'umask 077 && printf "HATCHET_CLIENT_TOKEN=%s\n" "$HATCHET_CLIENT_TOK
 sudo chgrp brickie /etc/brickie/env && sudo chmod 0640 /etc/brickie/env
 ```
 
-```ini title="/etc/systemd/system/brickie.service"
+```ini
+; /etc/systemd/system/brickie.service
 [Unit]
 Description=Brickie sandbox provider
 After=docker.service network-online.target

@@ -1,5 +1,0 @@
-{
-  "title": "Install",
-  "icon": "Download",
-  "pages": ["index", "docker", "kubernetes", "configuration"]
-}

@@ -1,7 +1,6 @@
----
-title: Kubernetes
-description: Deploy the provider, the agent-sandbox controller and Kata Containers with Helm.
----
+# Kubernetes
+
+Deploy the provider, the agent-sandbox controller and Kata Containers with Helm.
 
 The `brickie` chart in [hatchet-charts](https://github.com/hatchet-dev/hatchet-charts/tree/main/charts/brickie) deploys the provider, the [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controller and, by default, Kata Containers through [`kata-deploy`](https://kata-containers.github.io/kata-containers/installation/#install-on-kubernetes-with-helm-recommended).
 
@@ -24,7 +23,7 @@ helm install brickie hatchet/brickie --namespace brickie --create-namespace \
 
 Put the token in a Kubernetes Secret and reference it with `hatchet.existingSecret` for anything beyond a first try. Store credentials go in `storeSecret`, or use workload identity and annotate the service account with `serviceAccount.annotations`.
 
-The provider pod needs `get`, `create` and `update` on Secrets in its own namespace and in the sandbox namespace, and a few verbs on `agent-sandbox` resources. The chart creates these for you. The full list is on the [security page](/security#kubernetes-permissions).
+The provider pod needs `get`, `create` and `update` on Secrets in its own namespace and in the sandbox namespace, and a few verbs on `agent-sandbox` resources. The chart creates these for you. The full list is on the [security page](../security.md#kubernetes-permissions).
 
 ## Runtime classes
 

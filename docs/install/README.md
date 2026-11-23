@@ -1,0 +1,26 @@
+# Install
+
+What the provider needs before it runs anywhere.
+
+The provider is one process started as `brickie worker`. It connects out to Hatchet over gRPC with no other inbound connections needed. One Brickie provider connects to one Hatchet tenant in its own Kubernetes namespace and storage.
+
+## Requirements
+
+- A Hatchet tenant on Hatchet Cloud, or a self-hosted Hatchet v0.110.0 or newer with `SERVER_GRPC_OPERATORS_ENABLED=true`, and a client token for it.
+- An object store for snapshots, sandbox metadata and large files. For local Docker setups, a directory is fine on one machine. For production workloads, an external object store bucket is required. More information in [configuration](configuration.md#store).
+- Somewhere to run sandboxes. The [Docker driver](docker.md) uses the local Docker engine. The [Kubernetes driver](kubernetes.md) uses the [`agent-sandbox`](https://agent-sandbox.sigs.k8s.io/) controller and a pod runtime class such as Kata Containers.
+
+## Store
+
+Objects under the bucket are `snapshots/<sandboxId>/<runId>`, `latest/<sandboxId>`, `meta/<sandboxId>`, `results/<sandboxId>/...` and `staging/<sandboxId>/...`. The provider deletes objects older than 7 days at start, except the metadata and latest snapshot of any sandbox used within those seven days. 
+
+On S3 a one-day lifecycle rule on the `staging/` prefix is a good shorter bound.
+
+## Pick a driver
+
+Docker is for local testing only. Every production workload runs on Kubernetes, where each sandbox gets a VM or user-space kernel boundary, mutual TLS to the provider, a `NetworkPolicy` and resource limits.
+
+- [**Docker**](docker.md). The provider is a binary on a machine with Docker. Each sandbox is a container on that engine, reached in plaintext over loopback, with the container runtime as the only boundary. For trying Brickie out and for local development.
+- [**Kubernetes**](kubernetes.md). The provider is a pod deployed by the Helm chart. Each sandbox is its own pod from a warm pool, under Kata Containers, gVisor, EKS Nitro or any RuntimeClass, reached over mutual TLS and fenced by a NetworkPolicy. For every production workload.
+
+Both drivers run the same turn code, so a task written against one works unchanged on the other. The [drivers page](../drivers.md) explains what each does under the hood.

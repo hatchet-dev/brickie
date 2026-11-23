@@ -1,10 +1,8 @@
----
-title: Security
-description: What Brickie trusts, where the boundaries are, and what holds each one.
-icon: Shield
----
+# Security
 
-Untrusted code runs inside the sandbox. Everything the sandbox can reach is what untrusted code can attack. This page walks the boundaries from the outside in and says what holds each one. To report a vulnerability, use the [security policy](https://github.com/hatchet-dev/brickie/blob/main/SECURITY.md), not a public issue.
+What Brickie trusts, where the boundaries are, and what holds each one.
+
+Untrusted code runs inside the sandbox. Everything the sandbox can reach is what untrusted code can attack. This page walks the boundaries from the outside in and says what holds each one. To report a vulnerability, use the [security policy](../SECURITY.md), not a public issue.
 
 ## Who trusts what
 
@@ -45,7 +43,7 @@ Whatever a sandbox sends back is capped. `stdout` and `stderr` stop at 1 MiB eac
 
 A sandbox pod has no service account token, no host environment variables, no privilege escalation and the default seccomp profile. It runs under the RuntimeClass `--runtime` names, `kata-clh`, `gvisor` or `isolated-sandbox`, which is the real isolation layer. Linux capabilities are not dropped because package managers in common images need them.
 
-The sandbox needs no network of its own. `files.download` and `files.upload` run on the provider, which refuses private, loopback, link-local and unspecified addresses and any redirect off https. What untrusted code may reach is `--sandbox-egress`. `internet` allows public addresses and cluster DNS, `none` allows nothing. Both are a `NetworkPolicy` that the provider writes into the sandbox template, see [`networkPolicy()`](https://github.com/hatchet-dev/brickie/blob/main/internal/driver/kubernetes/kubernetes.go) in the Kubernetes driver. The Helm chart can add a second one that opens extra CIDRs through `networkPolicy.egressCIDRs`, see [`networkpolicy.yaml`](https://github.com/hatchet-dev/hatchet-charts/blob/main/charts/brickie/templates/networkpolicy.yaml) in the chart.
+The sandbox needs no network of its own. `files.download` and `files.upload` run on the provider, which refuses private, loopback, link-local and unspecified addresses and any redirect off https. What untrusted code may reach is `--sandbox-egress`. `internet` allows public addresses and cluster DNS, `none` allows nothing. Both are a `NetworkPolicy` that the provider writes into the sandbox template, see [`networkPolicy()`](../internal/driver/kubernetes/kubernetes.go) in the Kubernetes driver. The Helm chart can add a second one that opens extra CIDRs through `networkPolicy.egressCIDRs`, see [`networkpolicy.yaml`](https://github.com/hatchet-dev/hatchet-charts/blob/main/charts/brickie/templates/networkpolicy.yaml) in the chart.
 
 Every sandbox has CPU, memory and disk limits, `--sandbox-cpu`, `--sandbox-memory`, `--sandbox-disk`. The disk limit is also the size of the workspace. Specifically, a sandbox can fill itself up and not the node.
 
