@@ -1,16 +1,15 @@
-# Brickie
-
-Run sandboxes with filesystem snapshot/restore in your own Kubernetes cluster or cloud account.
+# Brickie: run sandboxes in your own cloud account
 
 [![release](https://img.shields.io/github/v/release/hatchet-dev/brickie?display_name=tag&sort=semver)](https://github.com/hatchet-dev/brickie/releases)
-[![license](https://img.shields.io/github/license/hatchet-dev/brickie)](LICENSE)
 [![go](https://img.shields.io/github/go-mod/go-version/hatchet-dev/brickie)](go.mod)
 [![e2e-docker](https://github.com/hatchet-dev/brickie/actions/workflows/e2e-docker.yaml/badge.svg?branch=main)](https://github.com/hatchet-dev/brickie/actions/workflows/e2e-docker.yaml)
 [![e2e-kind](https://github.com/hatchet-dev/brickie/actions/workflows/e2e-kind.yaml/badge.svg?branch=main)](https://github.com/hatchet-dev/brickie/actions/workflows/e2e-kind.yaml)
 [![FIPS 140-3](https://img.shields.io/badge/FIPS%20140--3-Go%20Cryptographic%20Module-2b6cb0)](docs/security.md)
 [![signed images](https://img.shields.io/badge/images-cosign%20signed%20%2B%20SBOM-2b6cb0)](docs/security.md#verifying-images)
 
-Sandboxes are built on top of [agent-sandbox](https://agent-sandbox.sigs.k8s.io/) with custom snapshot/restore implemented on top of object storage. They are designed to be called from [`@hatchet-dev/sandbox`](https://www.npmjs.com/package/@hatchet-dev/sandbox) and support the ability to take a [coordinated snapshot](https://hatchet.run/blog/agent-statefulness) of agent state. This means that every sandbox call is a retryable and observable [Hatchet](https://hatchet.run?utm_source=brickie-github&utm_medium=referral&utm_campaign=brickie-launch&utm_content=readme) task.
+Brickie lets you run sandboxes with filesystem snapshot/restore in your own Kubernetes cluster or cloud account.
+
+Brickie sandboxes are built on top of [agent-sandbox](https://agent-sandbox.sigs.k8s.io/) with custom snapshot/restore implemented on top of object storage. They are designed to be called from [`@hatchet-dev/sandbox`](https://www.npmjs.com/package/@hatchet-dev/sandbox) and support the ability to take a [coordinated snapshot](https://hatchet.run/blog/agent-statefulness) of agent state. This means that every sandbox call is a retryable and observable [Hatchet](https://hatchet.run?utm_source=brickie-github&utm_medium=referral&utm_campaign=brickie-launch&utm_content=readme) task.
 
 Each sandbox session is a container with a shell and a workspace and runs in your Kubernetes cluster with flexible runtime support, including [Kata](https://katacontainers.io/), [gVisor](https://gvisor.dev/) and [AWS Nitro](https://docs.aws.amazon.com/eks/latest/userguide/isolated-sandbox.html). Every call that changes the workspace produces a snapshot, which can be used to fork a new sandbox or resume an existing session.
 
