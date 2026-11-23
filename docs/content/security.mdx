@@ -4,102 +4,82 @@ description: What Brickie trusts, where the boundaries are, and what holds each 
 icon: Shield
 ---
 
-This page is the security model. Read it before you change a driver, the store or the shape of a sandbox pod. To report a vulnerability, use the [security policy](https://github.com/hatchet-dev/brickie/blob/main/SECURITY.md), not a public issue.
+Untrusted code runs inside the sandbox. Everything the sandbox can reach is what untrusted code can attack. This page walks the boundaries from the outside in and says what holds each one. To report a vulnerability, use the [security policy](https://github.com/hatchet-dev/brickie/blob/main/SECURITY.md), not a public issue.
 
 ## Who trusts what
 
 | Component | Runs where | Trusts |
 | --- | --- | --- |
-| SDK | your application | the Hatchet tenant token it was given |
-| Hatchet | Hatchet Cloud or a self-hosted engine | tenant tokens |
-| Provider (`brickie worker`) | a pod in your cluster, or a developer machine | its Hatchet token, its Kubernetes service account, its store credentials |
+| SDK | your application | its Hatchet tenant token |
+| Hatchet | Hatchet Cloud or self-hosted | tenant tokens |
+| Provider | a pod in your cluster, or your laptop | its Hatchet token, its service account, its store credentials |
 | sandboxd | PID 1 in every sandbox | a bearer token only the provider knows |
-| TLS proxy (`brickie sandbox-tls`) | a second container in every sandbox pod on Kubernetes | the provider's CA |
-| Sandbox | a pod on Kubernetes, a container on Docker | nothing |
-
-The agent's code runs in the sandbox. Everything the sandbox can reach is what an agent can attack. The rest of this page goes boundary by boundary and says what keeps each one.
+| TLS proxy | a sidecar in every sandbox pod on Kubernetes | the provider's CA |
+| Sandbox | a pod, or a container on Docker | nothing |
 
 ## SDK to Hatchet
 
-Every SDK call is one `brickie-sandbox` task run in the caller's tenant. The SDK holds nothing but the tenant token. It never talks to the provider, the store or a sandbox directly.
+The SDK only has a tenant token. It never talks to the provider, the store or a sandbox. Every call is a `brickie-sandbox` task run in that tenant.
 
-A sandbox id the caller picks must match `^[a-z0-9][a-z0-9-]{0,62}$`. The provider rejects anything else before it reaches a driver or the Kubernetes API.
-
-Large files travel on presigned URLs. The provider mints each URL for one object key, and a key belongs to one sandbox. A write that names another sandbox's key is refused. URLs stop working after 15 minutes.
+Sandbox IDs must match `^[a-z0-9][a-z0-9-]{0,62}$`. Large files move over presigned URLs that are good for one object, one sandbox and 15 minutes.
 
 ## Hatchet to provider
 
-The provider is a gRPC operator. It serves the `brickie-sandbox` action for one tenant, the one its token belongs to. Run one provider per tenant. Two tenants must never share a provider, because the store and the sandbox namespace are not split by tenant.
+One provider serves one tenant. Never share a provider between tenants - the store and the sandbox namespace are not split by tenant.
 
-From the task the provider takes the sandbox id, the image, the function and the input. It checks the id and every path. It does not check the image. If a tenant must not pull arbitrary images, restrict them on the cluster with an admission policy.
+The provider checks the sandbox ID and every path it is given. It does not check the image. If a tenant must not pull arbitrary images, enforce that on the cluster with an admission policy.
 
 ## Provider to sandbox
 
-The provider talks to one thing inside a sandbox, `sandboxd`. Commands go over gRPC and files over REST, to the pod IP on Kubernetes or to a loopback port on Docker. The provider never uses `pods/exec` and needs no access to pods at all.
+The provider only ever talks to `sandboxd` inside the sandbox. It never uses `pods/exec` and needs no access to pods.
 
-**The bearer token.** Every request carries a bearer token. `sandboxd` is given only the SHA-256 of that token, as a flag, so it can check requests but not reuse the token. The token lives in the Secret `brickie-sandboxd` in the provider's own namespace, which `--provider-namespace` names. It is never placed in the sandbox namespace. To rotate it, delete the Secret and restart the provider. Warm pods that already exist keep the old digest until their template changes, so delete the warm pools as well.
+Every request carries a bearer token. `sandboxd` only knows the SHA-256 of it, so it can check requests but never reuse the token. The token sits in the Secret `brickie-sandboxd` in the provider's namespace, never in the sandbox namespace.
 
-**Mutual TLS on Kubernetes.** `sandboxd` v1.0.8 cannot terminate TLS, so inside the pod it listens on loopback only. A second container, the provider's own image running `brickie sandbox-tls`, listens on the pod IP, gRPC on 9443 and REST on 8443, terminates TLS 1.3 and forwards to loopback. The proxy accepts a connection only with a client certificate signed by the provider's CA. The provider accepts only a server certificate from that same CA with the name `sandbox.brickie`. Together that means the bearer token is only ever sent to a sandbox pod of this provider, and nothing on the network can read it.
+On Kubernetes the hop is mutual TLS 1.3. `sandboxd` listens on loopback only. A sidecar, the provider's own image running `brickie sandbox-tls`, terminates TLS on the pod IP and only accepts client certificates from the provider's CA. The provider only accepts a server certificate from that CA named `sandbox.brickie`. So the token can only ever reach a sandbox of this provider, and nothing on the wire can read it. A `NetworkPolicy` also limits those ports to pods matching `--provider-selector`. Certificates rotate on their own. 
 
-The CA, `ca.crt` and `ca.key`, lives next to the token in `brickie-sandboxd`. The provider issues its own client certificate in memory at start and renews it before it expires. The server certificate lives in the Secret `brickie-sandbox-tls` in the sandbox namespace. It is mounted into the proxy container only, never into the sandbox container. It is valid for 30 days, the provider reissues it a week before expiry, and the proxy picks the new one up without a restart. To rotate everything, delete both Secrets and restart the provider.
+To rotate everything by hand, delete the two Secrets, `brickie-sandboxd` and `brickie-sandbox-tls`, delete the warm pools, and restart the provider.
 
-**The NetworkPolicy.** The agent-sandbox controller keeps a NetworkPolicy for every template, and the provider writes the rule into the template. It allows traffic to ports 9443 and 8443 only from pods in the provider's namespace that match `--provider-selector`. This only holds on a CNI that enforces NetworkPolicy. The TLS holds everywhere.
-
-**On Docker** the connection is plaintext on a loopback port published on `127.0.0.1` only. An agent inside a Docker sandbox can reach `sandboxd`'s ports, but it only has the digest of the token, not the token.
-
-**What the provider accepts back.** The `sandboxd` client never follows a redirect. A sandbox that answers with one gets an error, not a request to an address it picked. Every turn on a sandbox runs alone, from the moment the command starts until the snapshot is published, and the `latest` pointer never moves backwards. Everything a sandbox sends is capped on the provider side. `stdout` and `stderr` are kept up to 1 MiB each and marked as truncated past that. An inline file read stops at `--max-file-bytes` no matter what size the listing claimed. A snapshot is streamed to the store and fails past `--max-snapshot-bytes`, 1 GiB by default, without ever being held in memory.
+Whatever a sandbox sends back is capped. `stdout` and `stderr` stop at 1 MiB each. A file read stops at `--max-file-bytes` no matter what the sandbox claims the size is. A snapshot is streamed to the store and fails past `--max-snapshot-bytes`. Redirects from a sandbox are never followed.
 
 ## Sandbox to the outside
 
-**Init containers.** `--sandbox-init-containers` runs containers you supply in every sandbox pod, before `sandboxd` and the sandbox container, under the pod's runtime class. They exist for checks such as a FIPS verification script. They are provider configuration. The SDK cannot reach them, and whoever sets them is trusted with every sandbox.
+A sandbox pod has no service account token, no host environment variables, no privilege escalation and the default seccomp profile. It runs under the RuntimeClass `--runtime` names, `kata-clh`, `gvisor` or `isolated-sandbox`, which is the real isolation layer. Linux capabilities are not dropped because package managers in common images need them.
 
-**The pod.** A sandbox pod has no service account token, `automountServiceAccountToken` is false. It gets no host environment variables, cannot escalate privileges, and runs under the runtime's default seccomp profile. On a cluster with the `kata-clh`, `gvisor` or `isolated-sandbox` RuntimeClass, the pod runs under it. Set `--runtime` to require one, by short name or by RuntimeClass name. `auto` falls back to the default runtime and writes a warning to the log.
+The sandbox needs no network of its own. `files.download` and `files.upload` run on the provider, which refuses private, loopback, link-local and unspecified addresses and any redirect off https. What untrusted code may reach is `--sandbox-egress`. `internet` allows public addresses and cluster DNS, `none` allows nothing. Both are a `NetworkPolicy` that the provider writes into the sandbox template, see [`networkPolicy()`](https://github.com/hatchet-dev/brickie/blob/main/internal/driver/kubernetes/kubernetes.go) in the Kubernetes driver. The Helm chart can add a second one that opens extra CIDRs through `networkPolicy.egressCIDRs`, see [`networkpolicy.yaml`](https://github.com/hatchet-dev/hatchet-charts/blob/main/charts/brickie/templates/networkpolicy.yaml) in the chart.
 
-**Network.** The sandbox needs no network for Brickie itself. `files.download` and `files.upload` run on the provider, not in the sandbox. The provider fetches or sends the bytes, refuses URLs that resolve to loopback, private, link-local or unspecified addresses, and refuses redirects that leave https. What the agent's own code may reach is set by `--sandbox-egress`. `internet` allows public addresses and cluster DNS and blocks private ranges and the cloud metadata endpoint. `none` allows nothing.
+Every sandbox has CPU, memory and disk limits, `--sandbox-cpu`, `--sandbox-memory`, `--sandbox-disk`. The disk limit is also the size of the workspace. Specifically, a sandbox can fill itself up and not the node.
 
-**Limits.** Every sandbox has a CPU, memory and ephemeral storage limit, `--sandbox-cpu`, `--sandbox-memory` and `--sandbox-disk`, with defaults of 1, 2Gi and 10Gi. The workspace volume has the same size limit as the disk. An agent can fill up its own sandbox, not the node. The disk limit is a ceiling, not a reservation. A sandbox pod requests only 50Mi of ephemeral storage, so it schedules on any node, and the kubelet evicts it if it grows past what the node has.
-
-**Capabilities.** Linux capabilities are not dropped from the sandbox container, because package managers in common images need them, and the runtime class is the isolation layer. On a cluster without Kata or gVisor, either add `capabilities.drop: [ALL]` to the template in `internal/driver/kubernetes` or do not run untrusted code.
+`--sandbox-init-containers` run before anything else in the pod, under the same RuntimeClass. Use them for checks that must pass before untrusted code runs, such as a FIPS check. Whoever configures them is trusted with every sandbox.
 
 ## Files and snapshots
 
-**Paths.** Every file path is checked twice. First the provider rejects any path that leaves the workspace on paper, and escapes each path segment once so a name is always taken literally. Then reads, writes and listings go through `sandboxd`, which resolves symlinks and answers 403 to anything that escapes. `mkdir`, `rename`, `copy` and `remove` run as commands inside the sandbox. Each one first resolves the nearest existing parent of its paths and refuses to act unless that parent is under the workspace, and `remove` unlinks a symlink rather than following it. The only thing that could race that check is the agent itself, inside its own sandbox, where it already owns everything outside the workspace.
+Every path is checked twice, once by the provider, once by `sandboxd`, which also resolves symlinks. `mkdir`, `rename`, `copy` and `remove` run as commands inside the sandbox and refuse to act outside `/workspace`.
 
-**Snapshots.** A snapshot is a tar made by `tar` inside the sandbox. It is also unpacked inside the sandbox, never on the provider, and only its contents are unpacked. The archive cannot change `/workspace` itself, because the sandbox user does not own that directory. The worst a hostile archive can do is fill the sandbox's own workspace volume, which has a size limit.
+A snapshot is a tarball archive made inside the sandbox and unpacked inside the sandbox, never on the provider. Specifically, a hostile archive can only fill the sandbox's own workspace.
 
-**FIPS.** Brickie, `sandboxd` and the agent-sandbox controller are FIPS 140-3 builds. The default sandbox image, `alpine:3`, is not. Brickie runs no cryptography inside the sandbox image, so bring a FIPS base image when the agent's own code needs FIPS cryptography.
-
-**The store.** It holds snapshots, metadata and staged files. Only the provider has its credentials. On a `file://` store the SDK has to be on the same machine, which is for development only.
-
-**Delete.** `delete` removes a sandbox and everything the store holds for it, in this order. The running container or pod first. Then its metadata, so that a `connect` from that moment on answers "unknown sandbox" instead of ever starting with an empty workspace. Then its `latest` pointer. Then its snapshots, stored results and staged files, which all live under the sandbox's own prefix. Every step is fine with the object already being gone, so a delete that failed halfway finishes on retry, and deleting an unknown sandbox succeeds. A fork that has not changed anything yet still points at the deleted sandbox's snapshot and can no longer `connect`. A fork that has taken a snapshot of its own keeps that copy under its own prefix and has to be deleted separately. Anything left behind by a delete that failed every retry has no pointer to it and is removed by the 7-day prune.
-
-**The prune.** At start, the provider deletes its own store objects older than 7 days. A sandbox whose `latest` pointer was written within those 7 days keeps its metadata and the snapshot the pointer names, however old they are. Staged files and turn results are kept for the same window so a retried turn can still read its input and a replayed read can be signed again. On S3, a one-day lifecycle rule on the `staging/` prefix is a good shorter bound.
+`delete` removes the running sandbox first, then its metadata, then everything else. From the moment the metadata is gone, `connect` says "unknown sandbox" rather than ever starting empty. The provider also prunes store objects older than 7 days at start, except the metadata and latest snapshot of any sandbox used within those 7 days.
 
 ## Kubernetes permissions
 
-This is the provider's Role in the sandbox namespace.
+The provider's `Role` in the sandbox namespace has the following:
 
 | Resource | Verbs | Why |
 | --- | --- | --- |
-| `sandboxclaims` | get, list, create, patch, delete | one claim per sandbox, patch extends the idle deadline |
-| `sandboxtemplates`, `sandboxwarmpools` | get, create, update | one pool per image, the template carries the NetworkPolicy and the limits |
-| `secrets` | get, create, update | `brickie-sandbox-tls`, the server certificate the proxies mount |
+| `sandboxclaims` | get, list, create, patch, delete | one claim per sandbox |
+| `sandboxtemplates`, `sandboxwarmpools` | get, create, update | one pool per image |
+| `secrets` | get, create, update | the TLS server certificate |
 
-On top of that, `get`, `create` and `update` on `secrets` in the provider's own namespace, for `brickie-sandboxd` with the token and the CA, and a ClusterRole with `get` on `runtimeclasses` to find Kata and gVisor. Nothing on pods, events, nodes or networkpolicies.
-
-The agent-sandbox controller is what creates the pods and the NetworkPolicy. Its own permissions are documented upstream.
+Plus the same three verbs on `secrets` in its own namespace, and `get` on `runtimeclasses` cluster-wide. The `agent-sandbox` controller creates the pods and the `NetworkPolicy`.
 
 ## Lifecycle
 
-**Idle TTL.** A sandbox expires after its idle TTL. Before every turn the provider sets `spec.lifecycle.shutdownTime` on the claim to now plus the TTL. While the turn runs, restore, command, file transfer and checkpoint included, it renews that every half TTL. After the turn it sets it once more. So a turn never loses its pod to expiry, and the idle clock starts when the turn ends. When the time passes, the agent-sandbox controller deletes the pod, even if the provider is down. `kill()` deletes the claim right away.
+The provider sets the sandbox's expiry on the claim before every turn, renews it while the turn runs, and sets it again after. The agent-sandbox controller removes the pod when the time passes, even if the provider is down.
 
-**A replaced pod.** A pod that was replaced, for example by a node drain or an eviction, has lost its workspace. The provider notices this through a marker file that is written only after a restore succeeded and is never part of a snapshot. It refuses to run a turn on such a pod. `connect` restores the latest snapshot into the new pod. A fork records the snapshot it was made from as its `latest` at creation, so it can be connected again even before its first change.
-
-**Never silently empty.** If recording the `latest` pointer fails three times, the turn fails. If the store cannot be read, a `connect` fails. Either way a sandbox never quietly comes back empty. A turn that stored its snapshot also writes its result next to it, together with the `latest` pointer as it was at that moment, before it publishes. So when Hatchet retries the same run, which keeps the run id, the provider returns the stored result instead of running the command twice, and it publishes the snapshot only if no later turn has published since. If the store cannot be read to check that record, the retry fails rather than running the command again.
+A pod that was replaced by a drain or eviction has lost its workspace. The provider notices through a marker file that is never part of a snapshot, refuses to run a turn on it, and restores the latest snapshot on the next `connect`. If the store cannot be read, a connect fails rather than starting empty.
 
 ## Verifying images
 
-Every image we publish is signed with [cosign](https://docs.sigstore.dev/cosign/) keyless signing, tied to the GitHub Actions identity of the workflow run that built it. Each platform manifest also carries a syft SPDX SBOM as a signed attestation. `ghcr.io/hatchet-dev/brickie` is signed by `release.yaml` on a `v*` tag. `ghcr.io/hatchet-dev/sandboxd` and `ghcr.io/hatchet-dev/agent-sandbox-controller` are signed by a workflow run on `main`.
+Every image we publish is signed with [cosign](https://docs.sigstore.dev/cosign/) keyless signing and carries a syft SPDX SBOM. `ghcr.io/hatchet-dev/brickie` is signed by `release.yaml` on a `v*` tag. `sandboxd` and `agent-sandbox-controller` are signed by a workflow run on `main`.
 
 ```sh
 cosign verify ghcr.io/hatchet-dev/brickie:0.1.7 \
@@ -117,10 +97,3 @@ cosign verify-attestation --type spdxjson "ghcr.io/hatchet-dev/brickie@$digest" 
   --certificate-identity-regexp '^https://github.com/hatchet-dev/brickie/\.github/workflows/release\.yaml@refs/tags/v' \
   | jq -r .payload | base64 -d | jq .predicate > sbom.spdx.json
 ```
-
-## When you move a boundary
-
-- A new way for the provider to reach a sandbox has to carry the token and must not need access to pods.
-- A new place where bytes from a sandbox are handled on the provider has to treat them as hostile.
-- A new field in the pod spec keeps `automountServiceAccountToken: false`, `allowPrivilegeEscalation: false` and the seccomp profile. `sandboxd` stays on loopback, and the certificate Secret stays mounted into the proxy container only.
-- A new URL the provider fetches for a caller goes through the guarded client in `internal/driver/fsops`.

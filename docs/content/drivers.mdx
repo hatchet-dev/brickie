@@ -12,11 +12,11 @@ Brickie ships two drivers - Docker for local testing and Kubernetes for producti
 
 ## Docker
 
-Every sandbox is a container on the local Docker engine, named after the sandbox. When the provider starts, it pulls the `sandboxd` image once, copies the binary out of it and mounts that binary into every sandbox container. That is why a sandbox image only needs `sh` and `tar`. Note that since Docker's own init runs as PID 1 inside the container, child processes an agent leaves behind are cleaned up.
+Every sandbox is a container on the local Docker engine, named after the sandbox. When the provider starts, it pulls the `sandboxd` image once, copies the binary out of it and mounts that binary into every sandbox container. That is why a sandbox image only needs `sh` and `tar`. Note that since Docker's own init runs as PID 1 inside the container, child processes that untrusted code leaves behind are cleaned up.
 
 The provider talks to `sandboxd` over a port published on `127.0.0.1`, without TLS. Nothing outside the machine can reach it. A sandbox that sits idle past the idle TTL is removed. The workspace lives in the container, and when a sandbox is started again it is restored from its latest snapshot.
 
-The container runtime is the only boundary around the agent. There is no VM, no network policy and no resource limit.
+The container runtime is the only boundary around untrusted code. There is no VM, no network policy and no resource limit.
 
 ## Kubernetes
 
@@ -51,7 +51,7 @@ On top of that, a `NetworkPolicy` allows traffic to those two ports only from po
 
 ### Init containers
 
-`--sandbox-init-containers` takes a JSON list of Kubernetes containers. They run one after the other in every sandbox pod, before `sandboxd` and before the sandbox container, under the same runtime class. They are for checks that have to pass before any agent code runs. An example is a script that confirms the guest kernel booted in FIPS mode.
+`--sandbox-init-containers` takes a JSON list of Kubernetes containers. They run one after the other in every sandbox pod, before `sandboxd` and before the sandbox container, under the same runtime class. They are for checks that have to pass before untrusted code runs. An example is a script that confirms the guest kernel booted in FIPS mode.
 
 ```json
 [
@@ -75,7 +75,7 @@ If an init container fails, the pod never becomes ready. The claim reports `Depe
 
 `--sandbox-node-selector` and `--sandbox-tolerations` put sandbox pods on the nodes you choose. If those nodes are tainted, give the Kata installer the same tolerations.
 
-`--sandbox-cpu`, `--sandbox-memory` and `--sandbox-disk` are limits per pod. The disk limit is also the size of the workspace volume. An agent can fill up its own sandbox, but not the node.
+`--sandbox-cpu`, `--sandbox-memory` and `--sandbox-disk` are limits per pod. The disk limit is also the size of the workspace volume. Untrusted code can fill up its own sandbox, but not the node.
 
 ### Permissions
 

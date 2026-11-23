@@ -1,6 +1,6 @@
 # Brickie
 
-Agent sandboxes as [Hatchet](https://hatchet.run?utm_source=brickie-github&utm_medium=referral&utm_campaign=brickie-launch&utm_content=readme) tasks, in your own cloud account.
+Sandboxes as [Hatchet](https://hatchet.run?utm_source=brickie-github&utm_medium=referral&utm_campaign=brickie-launch&utm_content=readme) tasks, in your own cloud account.
 
 [![release](https://img.shields.io/github/v/release/hatchet-dev/brickie?display_name=tag&sort=semver)](https://github.com/hatchet-dev/brickie/releases)
 [![license](https://img.shields.io/github/license/hatchet-dev/brickie)](LICENSE)

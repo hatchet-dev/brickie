@@ -11,7 +11,7 @@ const dmMono = DM_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "
 export const metadata: Metadata = {
   metadataBase: new URL("https://hatchet-dev.github.io/brickie"),
   title: { template: "%s - Brickie", default: "Brickie" },
-  description: "Agent sandboxes as Hatchet tasks, in your own cloud account.",
+  description: "Sandboxes as Hatchet tasks, in your own cloud account.",
 };
 
 export default function Layout({ children }: { children: ReactNode }) {
