@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Eac
 
 ## [Unreleased]
 
+### Added
+
+- Docs under `docs/`. Quickstart, install, architecture, drivers, wire contract, security, extending and contributing, as plain Markdown.
+- `SECURITY.md` with the vulnerability reporting policy.
+- `CONTRIBUTING.md`, `AI_POLICY.md`, issue and pull request templates, and the vouch workflows that close pull requests from authors not in `.github/VOUCHED.td`.
+
 ## [0.1.7] - 2026-11-17
 
 ### Added

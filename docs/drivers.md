@@ -1,0 +1,75 @@
+# Drivers
+
+What the Docker and Kubernetes drivers do and when to use which.
+
+A driver does one job. It finds the sandbox a turn is for, or starts a new one, and hands the provider a connection to the `sandboxd` process inside it. Everything that happens after that - such as restoring the snapshot, running the command, moving files, taking the next snapshot - is the same code for every driver.
+
+Brickie ships two drivers - Docker for local testing and Kubernetes for production workloads.
+
+## Docker
+
+Every sandbox is a container on the local Docker engine, named after the sandbox. When the provider starts, it pulls the `sandboxd` image once, copies the binary out of it and mounts that binary into every sandbox container. That is why a sandbox image only needs `sh` and `tar`. Note that since Docker's own init runs as PID 1 inside the container, child processes that untrusted code leaves behind are cleaned up.
+
+The provider talks to `sandboxd` over a port published on `127.0.0.1`, without TLS. Nothing outside the machine can reach it. A sandbox that sits idle past the idle TTL is removed. The workspace lives in the container, and when a sandbox is started again it is restored from its latest snapshot.
+
+The container runtime is the only boundary around untrusted code. There is no VM, no network policy and no resource limit.
+
+## Kubernetes
+
+In the Kubernetes driver, every sandbox is a pod. The [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controller creates it from a `SandboxClaim` that the provider writes. For each sandbox image the provider also keeps a `SandboxTemplate` and a `SandboxWarmPool`, so a claim usually binds to a pod that is already running and the sandbox is ready at once with seignificantly small cold start times.
+
+Each pod has two containers from Brickie:
+- The sandbox container, with `sandboxd` copied in by an init container
+- A small TLS proxy, which is the provider's own image running `brickie sandbox-tls`.
+
+A create takes a ready pod from the pool, and the pool starts a replacement in the background. Every call on that pod goes over mutual TLS. When the idle TTL passes, the pod is removed and the snapshots stay in the store.
+
+### Runtime class
+
+The `--runtime` argument decides which [`RuntimeClass`](https://kubernetes.io/docs/concepts/containers/runtime-class/) every sandbox pod gets. 
+
+Right now, there are three of these supported:
+- `--runtime=kata` corresponds to `runtimeClassName: kata-clh`
+- `--runtime=gvisor` corresponds to `runtimeClassName: gvisor`,
+- `--runtime=nitro` corresponds to `runtimeClassName: isolated-sandbox`, the `RuntimeClass` of [EKS Nitro sandboxes](https://docs.aws.amazon.com/eks/latest/userguide/sandboxing.html)
+
+Any other value is used as a `runtimeClassName` as it is.
+
+`--runtime=auto` picks the first of kata, gvisor and nitro that exists on the cluster. If none of these exist, Brickie uses the cluster's default runtime and writes a warning to the log. Similarly, `--runtime=none` uses the default runtime and stays quiet about it.
+
+### Mutual TLS
+
+Inside the pod, `sandboxd` listens on loopback only. The TLS proxy listens on the pod IP, gRPC on port `9443` and the file API on `8443`, and accepts a connection only when the client certificate was signed by the provider's own CA. The provider in turn accepts only a server certificate from that CA with the name `sandbox.brickie`. So the bearer token that `sandboxd` checks is only ever sent to a pod of this provider, over an encrypted channel.
+
+On top of that, a `NetworkPolicy` allows traffic to those two ports only from pods that match `--provider-selector`.
+
+### Init containers
+
+`--sandbox-init-containers` takes a JSON list of Kubernetes containers. They run one after the other in every sandbox pod, before `sandboxd` and before the sandbox container, under the same runtime class. They are for checks that have to pass before untrusted code runs. An example is a script that confirms the guest kernel booted in FIPS mode.
+
+```json
+[
+  {
+    "name": "fips-check",
+    "image": "registry.example.com/fips-check:1.2.0",
+    "command": ["/check.sh"]
+  }
+]
+```
+
+> [!NOTE]
+> **Naming.** The names `sandboxd`, `sandbox` and `tls` are reserved for Brickie's own containers.
+
+If an init container fails, the pod never becomes ready. The claim reports `DependenciesNotReady` with the container's name, and after the claim timeout the turn fails with that message, so you see it in the Hatchet dashboard.
+
+### Egress, placement and limits
+
+`--sandbox-egress` says what a sandbox may reach. `internet` allows public addresses and cluster DNS and blocks private ranges and the cloud metadata endpoint. `none` blocks everything. Both are a `NetworkPolicy`, so they hold on any CNI that enforces policies.
+
+`--sandbox-node-selector` and `--sandbox-tolerations` put sandbox pods on the nodes you choose. If those nodes are tainted, give the Kata installer the same tolerations.
+
+`--sandbox-cpu`, `--sandbox-memory` and `--sandbox-disk` are limits per pod. The disk limit is also the size of the workspace volume. Untrusted code can fill up its own sandbox, but not the node.
+
+### Permissions
+
+The provider needs no access to pods. It reads and writes the agent-sandbox resources in the sandbox namespace, and Secrets in its own namespace and the sandbox namespace. The [security page](security.md#kubernetes-permissions) lists every verb.
