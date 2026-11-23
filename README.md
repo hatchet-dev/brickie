@@ -12,7 +12,7 @@ Run sandboxes with filesystem snapshot/restore in your own Kubernetes cluster or
 
 Sandboxes are built on top of [agent-sandbox](https://agent-sandbox.sigs.k8s.io/) with custom snapshot/restore implemented on top of object storage. They are designed to be called from [`@hatchet-dev/sandbox`](https://www.npmjs.com/package/@hatchet-dev/sandbox) and support the ability to take a [coordinated snapshot](https://hatchet.run/blog/agent-statefulness) of agent state. This means that every sandbox call is a retryable and observable [Hatchet](https://hatchet.run?utm_source=brickie-github&utm_medium=referral&utm_campaign=brickie-launch&utm_content=readme) task.
 
-Each sandbox session is a container with a shell and a workspace and runs in your Kubernetes cluster with flexible runtime support, including [Kata](https://katacontainers.io/), [gVisor](https://gvisor.dev/) and [AWS Nitro](https://docs.aws.amazon.com/eks/latest/userguide/isolated-sandbox.html). Every call into the sandbox produces a snapshot, which can be used to fork a new sandbox or resume an existing session.
+Each sandbox session is a container with a shell and a workspace and runs in your Kubernetes cluster with flexible runtime support, including [Kata](https://katacontainers.io/), [gVisor](https://gvisor.dev/) and [AWS Nitro](https://docs.aws.amazon.com/eks/latest/userguide/isolated-sandbox.html). Every call that changes the workspace produces a snapshot, which can be used to fork a new sandbox or resume an existing session.
 
 > Brickie is in beta. Flags, chart values and the wire contract may change before 1.0. See the [changelog](CHANGELOG.md).
 

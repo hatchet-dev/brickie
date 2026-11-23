@@ -1,8 +1,6 @@
 # Install
 
-What the provider needs before it runs anywhere.
-
-The provider is one process started as `brickie worker`. It connects out to Hatchet over gRPC with no other inbound connections needed. One Brickie provider connects to one Hatchet tenant in its own Kubernetes namespace and storage.
+Brickie runs as a specific type of process known as an operator against the Hatchet engine. This is a client-instantiated egress connection, so an ingress is not needed to the Brickie cluster.
 
 ## Requirements
 
@@ -12,7 +10,7 @@ The provider is one process started as `brickie worker`. It connects out to Hatc
 
 ## Store
 
-Objects under the bucket are `snapshots/<sandboxId>/<runId>`, `latest/<sandboxId>`, `meta/<sandboxId>`, `results/<sandboxId>/...` and `staging/<sandboxId>/...`. The provider deletes objects older than 7 days at start, except the metadata and latest snapshot of any sandbox used within those seven days. 
+Objects under the bucket are `snapshots/<sandboxId>/<runId>`, `latest/<sandboxId>`, `meta/<sandboxId>`, `results/<sandboxId>/...` and `staging/<sandboxId>/...`. The provider deletes objects older than 7 days at start, except the metadata and latest snapshot of any sandbox used within those seven days.
 
 On S3 a one-day lifecycle rule on the `staging/` prefix is a good shorter bound.
 

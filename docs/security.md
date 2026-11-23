@@ -1,23 +1,23 @@
 # Security
 
-What Brickie trusts, where the boundaries are, and what holds each one.
+Sandboxes run untrusted code. While this document lays out the security boundaries when using `brickie`, we highly recommend running sandboxes in a completely isolated cloud account, or at minimum, a separate VPC with tightly controlled IAM permissions.
 
-Untrusted code runs inside the sandbox. Everything the sandbox can reach is what untrusted code can attack. This page walks the boundaries from the outside in and says what holds each one. To report a vulnerability, use the [security policy](../SECURITY.md), not a public issue.
+To report a vulnerability, use the [security policy](../SECURITY.md), not a public issue.
 
 ## Who trusts what
 
-| Component | Runs where | Trusts |
-| --- | --- | --- |
-| SDK | your application | its Hatchet tenant token |
-| Hatchet | Hatchet Cloud or self-hosted | tenant tokens |
-| Provider | a pod in your cluster, or your laptop | its Hatchet token, its service account, its store credentials |
-| sandboxd | PID 1 in every sandbox | a bearer token only the provider knows |
-| TLS proxy | a sidecar in every sandbox pod on Kubernetes | the provider's CA |
-| Sandbox | a pod, or a container on Docker | nothing |
+| Component | Runs where                                   | Trusts                                                        |
+| --------- | -------------------------------------------- | ------------------------------------------------------------- |
+| SDK       | your application                             | its Hatchet tenant token                                      |
+| Hatchet   | Hatchet Cloud or self-hosted                 | tenant tokens                                                 |
+| Provider  | a pod in your cluster, or your laptop        | its Hatchet token, its service account, its store credentials |
+| sandboxd  | PID 1 in every sandbox                       | a bearer token only the provider knows                        |
+| TLS proxy | a sidecar in every sandbox pod on Kubernetes | the provider's CA                                             |
+| Sandbox   | a pod, or a container on Docker              | nothing                                                       |
 
 ## SDK to Hatchet
 
-The SDK only has a tenant token. It never talks to the provider, the store or a sandbox. Every call is a `brickie-sandbox` task run in that tenant.
+The SDK only has a tenant token. It never talks directly to the provider, the store or a sandbox. Every call is a `brickie-sandbox` task run in that tenant.
 
 Sandbox IDs must match `^[a-z0-9][a-z0-9-]{0,62}$`. Large files move over presigned URLs that are good for one object, one sandbox and 15 minutes.
 
@@ -33,7 +33,7 @@ The provider only ever talks to `sandboxd` inside the sandbox. It never uses `po
 
 Every request carries a bearer token. `sandboxd` only knows the SHA-256 of it, so it can check requests but never reuse the token. The token sits in the Secret `brickie-sandboxd` in the provider's namespace, never in the sandbox namespace.
 
-On Kubernetes the hop is mutual TLS 1.3. `sandboxd` listens on loopback only. A sidecar, the provider's own image running `brickie sandbox-tls`, terminates TLS on the pod IP and only accepts client certificates from the provider's CA. The provider only accepts a server certificate from that CA named `sandbox.brickie`. So the token can only ever reach a sandbox of this provider, and nothing on the wire can read it. A `NetworkPolicy` also limits those ports to pods matching `--provider-selector`. Certificates rotate on their own. 
+On Kubernetes the hop is mutual TLS 1.3. `sandboxd` listens on loopback only. A sidecar, the provider's own image running `brickie sandbox-tls`, terminates TLS on the pod IP and only accepts client certificates from the provider's CA. The provider only accepts a server certificate from that CA named `sandbox.brickie`. So the token can only ever reach a sandbox of this provider, and nothing on the wire can read it. A `NetworkPolicy` also limits those ports to pods matching `--provider-selector`. Certificates rotate on their own.
 
 To rotate everything by hand, delete the two Secrets, `brickie-sandboxd` and `brickie-sandbox-tls`, delete the warm pools, and restart the provider.
 
@@ -61,11 +61,11 @@ A snapshot is a tarball archive made inside the sandbox and unpacked inside the 
 
 The provider's `Role` in the sandbox namespace has the following:
 
-| Resource | Verbs | Why |
-| --- | --- | --- |
-| `sandboxclaims` | get, list, create, patch, delete | one claim per sandbox |
-| `sandboxtemplates`, `sandboxwarmpools` | get, create, update | one pool per image |
-| `secrets` | get, create, update | the TLS server certificate |
+| Resource                               | Verbs                            | Why                        |
+| -------------------------------------- | -------------------------------- | -------------------------- |
+| `sandboxclaims`                        | get, list, create, patch, delete | one claim per sandbox      |
+| `sandboxtemplates`, `sandboxwarmpools` | get, create, update              | one pool per image         |
+| `secrets`                              | get, create, update              | the TLS server certificate |
 
 Plus the same three verbs on `secrets` in its own namespace, and `get` on `runtimeclasses` cluster-wide. The `agent-sandbox` controller creates the pods and the `NetworkPolicy`.
 
