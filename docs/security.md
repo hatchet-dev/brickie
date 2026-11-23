@@ -4,80 +4,97 @@ Sandboxes run untrusted code. While this document lays out the security boundari
 
 To report a vulnerability, use the [security policy](../SECURITY.md), not a public issue.
 
-## Who trusts what
+## Threat Model
 
-| Component | Runs where                                   | Trusts                                                        |
-| --------- | -------------------------------------------- | ------------------------------------------------------------- |
-| SDK       | your application                             | its Hatchet tenant token                                      |
-| Hatchet   | Hatchet Cloud or self-hosted                 | tenant tokens                                                 |
-| Provider  | a pod in your cluster, or your laptop        | its Hatchet token, its service account, its store credentials |
-| sandboxd  | PID 1 in every sandbox                       | a bearer token only the provider knows                        |
-| TLS proxy | a sidecar in every sandbox pod on Kubernetes | the provider's CA                                             |
-| Sandbox   | a pod, or a container on Docker              | nothing                                                       |
+It is assumed that the code running inside the sandbox is hostile and tries to break out into and out of your cloud account. It may be an agent that was prompt-injected, a script from another source that you don't control, or even a user who is deliberately trying to be hostile. The attack paths may include trying to access snapshots from other sandbox sessions or to send data outside of the intended network boundaries.
 
-## SDK to Hatchet
+Another type of attacker is anyone holding a Hatchet token for your tenant. With the token they are able to start sandboxes and run commands in them but they should not be able to make the provider do anything a sandbox could not do on its own.
 
-The SDK only has a tenant token. It never talks directly to the provider, the store or a sandbox. Every call is a `brickie-sandbox` task run in that tenant.
+## How a call reaches a sandbox
 
-Sandbox IDs must match `^[a-z0-9][a-z0-9-]{0,62}$`. Large files move over presigned URLs that are good for one object, one sandbox and 15 minutes.
+```mermaid
+flowchart LR
+    code["Your code<br/>(SDK)"]
+    hatchet["Hatchet<br/>(orchestrator)"]
 
-## Hatchet to provider
+    subgraph cluster["Your cluster"]
+        direction LR
+        provider["Brickie provider"]
+        pod["Sandbox pod"]
+    end
 
-One provider serves one tenant. Never share a provider between tenants - the store and the sandbox namespace are not split by tenant.
+    code --> hatchet --> provider --> pod
+```
 
-The provider checks the sandbox ID and every path it is given. It does not check the image. If a tenant must not pull arbitrary images, enforce that on the cluster with an admission policy.
+Your code never talks to the sandbox directly. You use the Hatchet sandbox SDK to start a sandbox, which is simply a Hatchet task underneath. Hatchet then orchestrates these tasks and talks to the provider through its gRPC worker-based mechanism. The provider runs in your own Kubernetes cluster. Hatchet routes requests to the provider to start sandboxes and run commands in them, one by one. 
 
-## Provider to sandbox
+## Isolation
 
-The provider only ever talks to `sandboxd` inside the sandbox. It never uses `pods/exec` and needs no access to pods.
+### Runtime boundary
 
-Every request carries a bearer token. `sandboxd` only knows the SHA-256 of it, so it can check requests but never reuse the token. The token sits in the Secret `brickie-sandboxd` in the provider's namespace, never in the sandbox namespace.
+Every sandbox runs as a separate Kubernetes pod, with a `runtimeClassName` that you choose at deployment time. The runtime can give pods their own Linux kernel (Kata Containers based microVMs) or a user-space kernel (gVisor). By default, the Helm chart installs the Kata runtime backed by the Cloud Hypervisor shim for maximum isolation.
 
-On Kubernetes the hop is mutual TLS 1.3. `sandboxd` listens on loopback only. A sidecar, the provider's own image running `brickie sandbox-tls`, terminates TLS on the pod IP and only accepts client certificates from the provider's CA. The provider only accepts a server certificate from that CA named `sandbox.brickie`. So the token can only ever reach a sandbox of this provider, and nothing on the wire can read it. A `NetworkPolicy` also limits those ports to pods matching `--provider-selector`. Certificates rotate on their own.
+### Inside the pod
 
-To rotate everything by hand, delete the two Secrets, `brickie-sandboxd` and `brickie-sandbox-tls`, delete the warm pools, and restart the provider.
+A sandbox pod does not get any Kubernetes service account token meaning it cannot interface with the Kubernetes API server. By design, it does not have any access to the provider's environment variables and config values. The pod has privilege escalation off and the runtime's default seccomp profile is on.
 
-Whatever a sandbox sends back is capped. `stdout` and `stderr` stop at 1 MiB each. A file read stops at `--max-file-bytes` no matter what the sandbox claims the size is. A snapshot is streamed to the store and fails past `--max-snapshot-bytes`. Redirects from a sandbox are never followed.
+More plainly, Linux capabilities are not dropped inside the sandbox container. The reasoning behind this is that package managers in commonly used images require them. The TLS sidecar in the same pod drops every capability. It runs as non-root and has a read-only filesystem.
 
-## Sandbox to the outside
+The provider is designed to never `exec` into a pod. It talks to a process named `sandboxd` that runs as PID 1, over an authenticated channel.
 
-A sandbox pod has no service account token, no host environment variables, no privilege escalation and the default seccomp profile. It runs under the RuntimeClass `--runtime` names, `kata-clh`, `gvisor` or `isolated-sandbox`, which is the real isolation layer. Linux capabilities are not dropped because package managers in common images need them.
+### Resource limits
 
-The sandbox needs no network of its own. `files.download` and `files.upload` run on the provider, which refuses private, loopback, link-local and unspecified addresses and any redirect off https. What untrusted code may reach is `--sandbox-egress`. `internet` allows public addresses and cluster DNS, `none` allows nothing. Both are a `NetworkPolicy` that the provider writes into the sandbox template, see [`networkPolicy()`](../internal/driver/kubernetes/kubernetes.go) in the Kubernetes driver. The Helm chart can add a second one that opens extra CIDRs through `networkPolicy.egressCIDRs`, see [`networkpolicy.yaml`](https://github.com/hatchet-dev/hatchet-charts/blob/main/charts/brickie/templates/networkpolicy.yaml) in the chart.
+Every sandbox has a CPU, memory, and ephemeral storage limit. Note that the storage limit is the size of the workspace to make sure that a sandbox can only fill up its own disk and not starve its node or its neighbors.
 
-Every sandbox has CPU, memory and disk limits, `--sandbox-cpu`, `--sandbox-memory`, `--sandbox-disk`. The disk limit is also the size of the workspace. Specifically, a sandbox can fill itself up and not the node.
+### One call per sandbox
 
-`--sandbox-init-containers` run before anything else in the pod, under the same RuntimeClass. Use them for checks that must pass before untrusted code runs, such as a FIPS check. Whoever configures them is trusted with every sandbox.
+A sandbox runs one command call at a time. Subsequent calls are queued by the provider. Two sandboxes can never share a pod, their workspace or their snapshots. If a fork was made from a snapshot, the forked sandbox gets its own copy of the snapshotted data so that writes land in its own copy of the data from then on.
 
-## Files and snapshots
+### TTL
 
-Every path is checked twice, once by the provider, once by `sandboxd`, which also resolves symlinks. `mkdir`, `rename`, `copy` and `remove` run as commands inside the sandbox and refuse to act outside `/workspace`.
+Every sandbox has an idle time-to-live (TTL) attached to it. The pod inherits this TTL at creation time and the Kubernetes controller enforces it. Pods that cross this TTL are stopped and destroyed, even if the provider is down.
 
-A snapshot is a tarball archive made inside the sandbox and unpacked inside the sandbox, never on the provider. Specifically, a hostile archive can only fill the sandbox's own workspace.
+## Network
 
-`delete` removes the running sandbox first, then its metadata, then everything else. From the moment the metadata is gone, `connect` says "unknown sandbox" rather than ever starting empty. The provider also prunes store objects older than 7 days at start, except the metadata and latest snapshot of any sandbox used within those 7 days.
+### Egress
 
-## Kubernetes permissions
+By default, the Helm chart creates two `NetworkPolicy` resources to enforce network egress for every sandbox from reaching anything in the internet or your private address space. For this to be enforced, make sure your cluster has a CNI that supports it.
 
-The provider's `Role` in the sandbox namespace has the following:
+### File transfers
 
-| Resource                               | Verbs                            | Why                        |
-| -------------------------------------- | -------------------------------- | -------------------------- |
-| `sandboxclaims`                        | get, list, create, patch, delete | one claim per sandbox      |
-| `sandboxtemplates`, `sandboxwarmpools` | get, create, update              | one pool per image         |
-| `secrets`                              | get, create, update              | the TLS server certificate |
+The SDK uses presigned URLs to transfer big files in and out of sandboxes. The sandbox itself does not need any network for it since the provider carries this out. The provider enforces `https` and refuses private as well as loopback, link-local and unspecified addresses. It also rejects any URLs with a redirect.
 
-Plus the same three verbs on `secrets` in its own namespace, and `get` on `runtimeclasses` cluster-wide. The `agent-sandbox` controller creates the pods and the `NetworkPolicy`.
+## Communication between provider and sandbox
 
-## Lifecycle
+### Mutual TLS
 
-The provider sets the sandbox's expiry on the claim before every turn, renews it while the turn runs, and sets it again after. The agent-sandbox controller removes the pod when the time passes, even if the provider is down.
+The sandbox agent (`sandboxd`) listens on loopback only. A sidecar in the same pod terminated TLS on the pod IP and accepts connections only when the client certificate is signed by the provider-owned certificate authority. The provider, in turn, accepts only a server certificate from the authority with the expected name. Both sides are checked to make sure a stray pod cannot pretend to be a sandbox and nothing else in the cluster can talk to one.
 
-A pod that was replaced by a drain or eviction has lost its workspace. The provider notices through a marker file that is never part of a snapshot, refuses to run a turn on it, and restores the latest snapshot on the next `connect`. If the store cannot be read, a connect fails rather than starting empty.
+The provider creates the authority on first start. It issues fresh certificates and rotates them on its own. 
 
-## Verifying images
+### Request tokens
 
-Every image we publish is signed with [cosign](https://docs.sigstore.dev/cosign/) keyless signing and carries a syft SPDX SBOM. `ghcr.io/hatchet-dev/brickie` is signed by `release.yaml` on a `v*` tag. `sandboxd` and `agent-sandbox-controller` are signed by a workflow run on `main`.
+Every request to a sandbox carries a bearer token. The sandbox only holds the SHA-256 of the token so it can check a request but cannot replay the token against another sandbox. The token itself is kept in a Kubernetes Secret in the provider's namespace.
+
+## Data at rest
+
+Snapshots, sandbox metadata, and staged files live in object storage in your own cloud account. Brickie does not encrypt objects itself, hence it is recommended that you turn on server side encryption on your storage bucket as well as implement a bucket policy to restrict data interchange only to the provider's identity.
+
+Large files (more than 2 MiB by default) move between the SDK and the store through a presigned URL. The URL applies to only one object and has a TTL of 15 minutes.
+
+## Tenancy
+
+A single Brickie provider is meant to server one Hatchet tenant only. The store and sandbox namespace are not meant to be shared between tenants. 
+
+## Supply chain
+
+The provider, `sandboxd` and the agent-sandbox controller are all FIPS 140-3 builds. With the default Kata runtime the guest kernel boots with FIPS mode on as well.
+
+Additionally, every container image is signed with cosign keyless signing and carrires a syft SPDX SBOM.
+
+### Verifying images
+
+`ghcr.io/hatchet-dev/brickie` is signed by the release workflow on a `v*` tag. `sandboxd` and `agent-sandbox-controller` are signed by a workflow run on `main`.
 
 ```sh
 cosign verify ghcr.io/hatchet-dev/brickie:0.1.7 \
@@ -95,3 +112,15 @@ cosign verify-attestation --type spdxjson "ghcr.io/hatchet-dev/brickie@$digest" 
   --certificate-identity-regexp '^https://github.com/hatchet-dev/brickie/\.github/workflows/release\.yaml@refs/tags/v' \
   | jq -r .payload | base64 -d | jq .predicate > sbom.spdx.json
 ```
+
+## Known gaps
+
+- Linux capabilities are not dropped inside the sandbox container. The runtime boundary is what contains them and microVM based isolation is recommended for critical workloads.
+- Brickie does not encrypt snapshots by itself.
+- The Docker driver runs sandboxes as plain containers with no VM boundary, no network policy and no resource limits. It is, therefor, intended for local testing only.
+- Init containers you configure run before untrusted code under full trust.
+- Images are not validated in the sandbox pod. It is advised to enforce an admission policy for stronger security.
+
+## Reporting a vulnerability
+
+Use the [security policy](../SECURITY.md). It explains how to reach the maintainers privately.
