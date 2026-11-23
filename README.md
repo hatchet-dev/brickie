@@ -20,6 +20,16 @@ Each sandbox session is a container with a shell and a workspace and runs in you
 
 ## Features
 
+- Hatchet-guaranteed safe retries: Hatchet's durable execution guarantees mean no wasted compute on retries of succesful sandbox operations.
+- Immutable and forkable snapshots: Every call that changes files in your sandbox workspace are saved and stored in object storage. They are immutable and forkable from other sandbox processes.
+- Fast starts: A warm pool of pods maintained by the provider means small cold start times for new sandbox pods.
+- Custom images: Any image with `sh` and `tar` can be used to run a sandbox.
+- mTLS for all sandboxes: The provider and each sandbox talk to each other over mutual TLS with strict guarantees around certificate issuance, rotation, and usage.
+- Resource limits: Each sandbox is backed by a pre-set network and resource limit to cap usage and to protect nodes from starvation.
+- Any object storage: Metadata and snapshots can be stored in any S3-compatible store as well as in GCS and Azure.
+- FIPS support: By default, the provider runs all of its workloads in FIPS 140-3 mode with signed and SBOM attested container images.
+- Extensible interface: Backed by drivers, the provider can be extended to support more backends apart from Docker and Kubernetes.
+
 ## Try it
 
 The [quickstart](docs/quickstart.md) runs a local Hatchet with one Docker Compose file, the provider as a binary, and a first sandbox session from a single TypeScript file. No clone needed. From a checkout, `hack/run-demo.sh` does the same in one go.
